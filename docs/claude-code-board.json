@@ -1,0 +1,232 @@
+{
+  "$comment": "Reproducible spec for the 'Claude Code Monitoring' Honeycomb board. Every query_spec here was run against live Claude Code telemetry before the board was created. To recreate: run each query_spec via the Honeycomb query API (or the Honeycomb MCP run_query tool), collect each query run PK, then create the board with those PKs as panel ids. See docs/SELF_OBSERVABILITY.md for the column-level gotchas these specs encode.",
+  "board": {
+    "name": "Claude Code Monitoring",
+    "description": "Claude Code observing itself: cost, tokens, latency, tool behavior, and internal spans, from its own OpenTelemetry export.",
+    "tags": ["service:claude-code"],
+    "preset_filters": [
+      { "column": "model", "alias": "Model" },
+      { "column": "tool_name", "alias": "Tool" },
+      { "column": "session.id", "alias": "Session" }
+    ]
+  },
+  "panels": [
+    {
+      "name": "Cost by model",
+      "dataset": "claude-code",
+      "chart_type": "stacked",
+      "display_style": "combo",
+      "query_spec": {
+        "calculations": [{ "op": "SUM", "column": "cost_usd" }],
+        "breakdowns": ["model"],
+        "filters": [{ "column": "event.name", "op": "=", "value": "api_request" }],
+        "limit": 20
+      }
+    },
+    {
+      "name": "Token usage by type",
+      "dataset": "claude-code",
+      "chart_type": "line",
+      "display_style": "combo",
+      "query_spec": {
+        "calculations": [
+          { "op": "SUM", "column": "input_tokens" },
+          { "op": "SUM", "column": "output_tokens" },
+          { "op": "SUM", "column": "cache_read_tokens" },
+          { "op": "SUM", "column": "cache_creation_tokens" }
+        ],
+        "filters": [{ "column": "event.name", "op": "=", "value": "api_request" }]
+      }
+    },
+    {
+      "name": "Cost by model (metric)",
+      "dataset": "metrics",
+      "chart_type": "line",
+      "display_style": "chart",
+      "query_spec": {
+        "calculations": [{ "op": "SUM", "column": "claude_code.cost.usage" }],
+        "breakdowns": ["model"],
+        "filters": [{ "column": "service.name", "op": "=", "value": "claude-code" }],
+        "limit": 20
+      }
+    },
+    {
+      "name": "Tokens by type and model (metric)",
+      "dataset": "metrics",
+      "chart_type": "stacked",
+      "display_style": "combo",
+      "query_spec": {
+        "calculations": [{ "op": "SUM", "column": "claude_code.token.usage" }],
+        "breakdowns": ["type", "model"],
+        "filters": [{ "column": "service.name", "op": "=", "value": "claude-code" }],
+        "limit": 20
+      }
+    },
+    {
+      "name": "API latency and time-to-first-token",
+      "dataset": "claude-code",
+      "chart_type": "line",
+      "display_style": "combo",
+      "query_spec": {
+        "calculations": [
+          { "op": "P50", "column": "duration_ms" },
+          { "op": "P95", "column": "duration_ms" },
+          { "op": "P99", "column": "duration_ms" },
+          { "op": "P95", "column": "ttft_ms" }
+        ],
+        "breakdowns": ["model"],
+        "filters": [{ "column": "event.name", "op": "=", "value": "api_request" }],
+        "limit": 20
+      }
+    },
+    {
+      "name": "Tool success rate",
+      "dataset": "claude-code",
+      "chart_type": "line",
+      "display_style": "combo",
+      "thresholds": [
+        { "value": 95, "operation": "lt", "color": "red", "line_style": "filled-dotted", "label": "95%", "chart_index": 0 }
+      ],
+      "$note": "The TOTAL row sums per-tool percentages and is not meaningful; read the per-tool rows.",
+      "query_spec": {
+        "calculations": [
+          { "op": "COUNT", "name": "total" },
+          { "op": "COUNT", "name": "ok", "filters": [{ "column": "success", "op": "=", "value": true }] }
+        ],
+        "formulas": [
+          { "name": "success_rate_pct", "expression": "$ok / $total * 100" },
+          { "name": "calls", "expression": "$total" }
+        ],
+        "breakdowns": ["tool_name"],
+        "filters": [{ "column": "event.name", "op": "=", "value": "tool_result" }],
+        "orders": [{ "column": "calls", "order": "descending" }],
+        "limit": 25
+      }
+    },
+    {
+      "name": "Tool latency and call volume",
+      "dataset": "claude-code",
+      "chart_type": "line",
+      "display_style": "combo",
+      "query_spec": {
+        "calculations": [
+          { "op": "P50", "column": "duration_ms" },
+          { "op": "P95", "column": "duration_ms" },
+          { "op": "COUNT" }
+        ],
+        "breakdowns": ["tool_name"],
+        "filters": [{ "column": "event.name", "op": "=", "value": "tool_result" }],
+        "orders": [{ "op": "COUNT", "order": "descending" }],
+        "limit": 25
+      }
+    },
+    {
+      "name": "Tool permission decisions",
+      "dataset": "claude-code",
+      "chart_type": "categorical_bar",
+      "display_style": "combo",
+      "query_spec": {
+        "calculations": [{ "op": "COUNT" }],
+        "breakdowns": ["decision", "source", "tool_name"],
+        "filters": [{ "column": "event.name", "op": "=", "value": "tool_decision" }],
+        "orders": [{ "op": "COUNT", "order": "descending" }],
+        "limit": 30
+      }
+    },
+    {
+      "name": "Lines of code changed",
+      "dataset": "metrics",
+      "chart_type": "bar",
+      "display_style": "combo",
+      "$note": "The type attribute is shared with the token metrics, so the IN filter is required or zero-valued token rows appear.",
+      "query_spec": {
+        "calculations": [{ "op": "SUM", "column": "claude_code.lines_of_code.count" }],
+        "breakdowns": ["type"],
+        "filters": [
+          { "column": "service.name", "op": "=", "value": "claude-code" },
+          { "column": "type", "op": "in", "value": ["added", "removed"] }
+        ],
+        "limit": 20
+      }
+    },
+    {
+      "name": "Internal span latency by operation",
+      "dataset": "claude-code",
+      "chart_type": "line",
+      "display_style": "combo",
+      "$note": "Requires CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1. gen_ai.request.attempt and tool.output are zero-duration markers.",
+      "query_spec": {
+        "calculations": [
+          { "op": "COUNT" },
+          { "op": "P50", "column": "duration_ms" },
+          { "op": "P95", "column": "duration_ms" }
+        ],
+        "breakdowns": ["name"],
+        "filters": [
+          { "column": "meta.signal_type", "op": "=", "value": "trace" },
+          { "column": "name", "op": "exists" }
+        ],
+        "orders": [{ "column": "name", "order": "ascending" }],
+        "limit": 25
+      }
+    },
+    {
+      "name": "Top sessions by activity",
+      "dataset": "claude-code",
+      "chart_type": "none",
+      "display_style": "table",
+      "query_spec": {
+        "calculations": [
+          { "op": "COUNT", "name": "events" },
+          { "op": "SUM", "column": "cost_usd", "name": "cost" },
+          { "op": "COUNT_DISTINCT", "column": "tool_use_id", "name": "tool_calls" }
+        ],
+        "formulas": [
+          { "name": "events_n", "expression": "$events" },
+          { "name": "cost_usd", "expression": "$cost" },
+          { "name": "tool_calls_n", "expression": "$tool_calls" }
+        ],
+        "breakdowns": ["session.id"],
+        "filters": [{ "column": "session.id", "op": "exists" }],
+        "orders": [{ "column": "events_n", "order": "descending" }],
+        "limit": 20
+      }
+    },
+    {
+      "name": "Event mix",
+      "dataset": "claude-code",
+      "chart_type": "categorical_bar",
+      "display_style": "combo",
+      "$note": "event.name values are bare, not claude_code.-prefixed. api_error and api_refusal appear here once they occur.",
+      "query_spec": {
+        "calculations": [{ "op": "COUNT" }],
+        "breakdowns": ["event.name"],
+        "filters": [{ "column": "meta.signal_type", "op": "=", "value": "log" }],
+        "orders": [{ "op": "COUNT", "order": "descending" }],
+        "limit": 30
+      }
+    },
+    {
+      "name": "Prompt volume and length",
+      "dataset": "claude-code",
+      "chart_type": "line",
+      "display_style": "combo",
+      "$note": "prompt_length, not user_prompt_length -- the latter exists but is never populated.",
+      "query_spec": {
+        "calculations": [
+          { "op": "COUNT" },
+          { "op": "P50", "column": "prompt_length" },
+          { "op": "P95", "column": "prompt_length" }
+        ],
+        "breakdowns": ["query_source"],
+        "filters": [{ "column": "event.name", "op": "=", "value": "user_prompt" }],
+        "limit": 20
+      }
+    }
+  ],
+  "not_yet_available": {
+    "$comment": "These metrics do not exist until Claude Code performs the action. A panel referencing a never-written column is a hard query error, so add them only after the column appears.",
+    "claude_code.commit.count": "appears after Claude Code creates a git commit",
+    "claude_code.pull_request.count": "appears after Claude Code opens a pull request"
+  }
+}

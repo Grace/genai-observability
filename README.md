@@ -126,7 +126,8 @@ web/                        React + TypeScript Normalization Inspector
 otel/                       ADOT/reference collector configuration
 examples/                   normalization, evaluation, mapping fixtures
 scripts/                    build, deploy, smoke, replay, mapping helpers
-docs/                       architecture, semantics, mapping, deployment, validation
+docs/                       architecture, semantics, mapping, deployment, validation,
+                            Claude Code self-observability
 ```
 
 ## Normalization: preserve meaning before convenience
@@ -307,6 +308,10 @@ mapping_state_machine_arn
 corpus_bucket
 eval_table
 ```
+
+## Self-observability
+
+Claude Code exports its own OpenTelemetry metrics, log events, and spans. `docs/SELF_OBSERVABILITY.md` records the configuration, the Honeycomb dataset routing (metrics land in the shared `metrics` dataset; the `x-honeycomb-dataset` header is ignored), the places the vendor documentation does not match the wire format, and the privacy consequences of enabling content capture. `docs/claude-code-board.json` holds the validated query specs for the **Claude Code Monitoring** board, and `scripts/claude-code-telemetry.env.example` holds the exporter configuration.
 
 ## Security and operating boundaries
 
