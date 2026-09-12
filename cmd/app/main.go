@@ -18,6 +18,7 @@ import (
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 	"github.com/grace/genai-observability/internal/model"
 	"github.com/grace/genai-observability/internal/normalize"
+	"github.com/grace/genai-observability/internal/pricing"
 	"github.com/grace/genai-observability/internal/telemetry"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -64,7 +65,25 @@ func main() {
 	mux.HandleFunc("/ask", a.ask)
 	mux.HandleFunc("/normalize", a.normalize)
 	log.Printf("listening on :8080; candidate model=%s", a.modelID)
-	log.Fatal(http.ListenAndServe(":8080", otelhttp.NewHandler(mux, "http.server")))
+	handler := cors(mux)
+	log.Fatal(http.ListenAndServe(":8080", otelhttp.NewHandler(handler, "http.server")))
+}
+
+func cors(next http.Handler) http.Handler {
+	origin := os.Getenv("ALLOWED_ORIGIN")
+	if origin == "" {
+		origin = "*"
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Traceparent, Tracestate")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *app) normalize(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +132,7 @@ func (a *app) ask(w http.ResponseWriter, r *http.Request) {
 	defer span.End()
 	span.SetAttributes(attribute.String("gen_ai.request.model", a.modelID), attribute.String("gen_ai.operation.name", "chat"))
 
+	started := time.Now()
 	answer, inTok, outTok, err := a.generate(ctx, body)
 	if err != nil {
 		span.RecordError(err)
@@ -120,7 +140,8 @@ func (a *app) ask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 502)
 		return
 	}
-	span.SetAttributes(attribute.Int("gen_ai.usage.input_tokens", inTok), attribute.Int("gen_ai.usage.output_tokens", outTok))
+	latencyMS := float64(time.Since(started).Microseconds()) / 1000.0
+	span.SetAttributes(attribute.Int("gen_ai.usage.input_tokens", inTok), attribute.Int("gen_ai.usage.output_tokens", outTok), attribute.Float64("gen_ai.response.latency_ms", latencyMS))
 
 	sc := trace.SpanContextFromContext(ctx)
 	traceID, spanID := sc.TraceID().String(), sc.SpanID().String()
@@ -130,7 +151,16 @@ func (a *app) ask(w http.ResponseWriter, r *http.Request) {
 	req := model.EvalRequest{
 		TraceID: traceID, SpanID: spanID, Question: body.Question, Answer: answer, Evidence: body.Evidence,
 		Model: a.modelID, PromptVersion: "candidate-v1", ObservedAt: time.Now().UTC(),
-		Attributes: map[string]string{"source": "ecs", "service": "genai-observability-app"},
+		InputTokens: int64(inTok), OutputTokens: int64(outTok), LatencyMS: latencyMS,
+		TraceContext: telemetry.InjectTraceContext(ctx),
+		Attributes:   map[string]string{"source": "ecs", "service": "genai-observability-app"},
+	}
+	if c, err := pricingCatalog(); err == nil {
+		if cost, err := pricing.Calculate(c, a.modelID, int64(inTok), int64(outTok)); err == nil {
+			req.CostUSD = &cost.USD
+			req.PricingVersion = cost.PricingVersion
+			span.SetAttributes(attribute.Float64("gen_ai.usage.cost_usd", cost.USD), attribute.String("gen_ai.usage.pricing_version", cost.PricingVersion))
+		}
 	}
 	queued := a.publishEvaluation(ctx, req) == nil
 	w.Header().Set("Content-Type", "application/json")
@@ -157,8 +187,12 @@ func (a *app) generate(ctx context.Context, body askRequest) (string, int, int, 
 	}
 	inTok, outTok := 0, 0
 	if out.Usage != nil {
-		inTok = int(*out.Usage.InputTokens)
-		outTok = int(*out.Usage.OutputTokens)
+		if out.Usage.InputTokens != nil {
+			inTok = int(*out.Usage.InputTokens)
+		}
+		if out.Usage.OutputTokens != nil {
+			outTok = int(*out.Usage.OutputTokens)
+		}
 	}
 	return answer, inTok, outTok, nil
 }
@@ -175,4 +209,11 @@ func (a *app) publishEvaluation(ctx context.Context, req model.EvalRequest) erro
 		return fmt.Errorf("EventBridge rejected %d event(s)", out.FailedEntryCount)
 	}
 	return nil
+}
+
+func pricingCatalog() (pricing.Catalog, error) {
+	if raw := os.Getenv("MODEL_PRICING_JSON"); raw != "" {
+		return pricing.ParseCatalogJSON(raw)
+	}
+	return pricing.DefaultCatalog()
 }

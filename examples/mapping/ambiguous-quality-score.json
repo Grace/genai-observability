@@ -1,0 +1,17 @@
+{
+  "id": "vendor-quality-to-eval-score-v1",
+  "source": {
+    "system": "example-eval-framework",
+    "version": "1.0",
+    "field": "quality_score",
+    "type": "number",
+    "description": "Quality score"
+  },
+  "target": {
+    "system": "opentelemetry-genai",
+    "field": "gen_ai.evaluation.score.value",
+    "type": "number",
+    "description": "Numeric result produced by an evaluation"
+  },
+  "context": ["The source does not document scale, directionality, or evaluator semantics."]
+}

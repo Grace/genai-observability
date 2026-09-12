@@ -10,3 +10,17 @@ replay_model_id = "amazon.nova-lite-v1:0"
 # Create this secret with scripts/create-honeycomb-secret.sh; do not put the API key itself in tfvars.
 honeycomb_api_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:genai-observability/honeycomb-..."
 honeycomb_otlp_endpoint = "https://api.honeycomb.io"
+
+mapping_model_id = "REPLACE_WITH_BEDROCK_MODEL_OR_INFERENCE_PROFILE"
+
+# Optional: provide rates you have verified for the exact model IDs and region.
+# Rates are USD per 1M tokens. Unknown models intentionally produce no cost value.
+# model_pricing_json = jsonencode({
+#   version  = "2026-09-verified"
+#   currency = "USD"
+#   unit     = "per_1m_tokens"
+#   models = {
+#     "your.candidate.model" = { input = 0.00, output = 0.00 }
+#     "your.replay.model"    = { input = 0.00, output = 0.00 }
+#   }
+# })

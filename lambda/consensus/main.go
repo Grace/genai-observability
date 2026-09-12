@@ -5,10 +5,19 @@ import (
 	"math"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/grace/genai-observability/internal/lambdatel"
 	"github.com/grace/genai-observability/internal/model"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 func handler(ctx context.Context, results []model.EvalResult) (model.Consensus, error) {
+	_ = lambdatel.Setup(ctx, "genai-observability-consensus")
+	var carrier map[string]string
+	if len(results) > 0 {
+		carrier = results[0].TraceContext
+	}
+	ctx, span := lambdatel.Start(ctx, carrier, "evaluation.consensus")
+	defer func() { span.End(); _ = lambdatel.Flush(ctx) }()
 	var scores []float64
 	for _, r := range results {
 		if r.Evaluator.Type == "llm_judge" && r.Semantics.Concept == "groundedness" {
@@ -42,6 +51,7 @@ func handler(ctx context.Context, results []model.EvalResult) (model.Consensus, 
 	if agreement < 0 {
 		agreement = 0
 	}
+	span.SetAttributes(attribute.Float64("evaluation.mean", mean), attribute.Float64("evaluation.judge_agreement", agreement), attribute.Int("evaluation.judge_count", len(scores)))
 	return model.Consensus{MeanScore: mean, StdDev: stddev, JudgeAgreement: agreement, MaxDisagreement: maxDisagreement, JudgeCount: len(scores)}, nil
 }
 

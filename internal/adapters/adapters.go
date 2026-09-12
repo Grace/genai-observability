@@ -25,6 +25,12 @@ func For(source string) (Adapter, error) {
 		return mapAdapter{name: "braintrust", fn: normalizeBraintrust}, nil
 	case "bedrock", "aws-bedrock":
 		return mapAdapter{name: "aws-bedrock", fn: normalizeBedrock}, nil
+	case "pydanticai", "pydantic-ai":
+		return mapAdapter{name: "pydantic-ai", fn: normalizePydanticAI}, nil
+	case "eino":
+		return mapAdapter{name: "eino", fn: normalizeEino}, nil
+	case "genkit", "genkit-go":
+		return mapAdapter{name: "genkit", fn: normalizeGenkit}, nil
 	default:
 		return nil, fmt.Errorf("unsupported telemetry source %q", source)
 	}
@@ -130,6 +136,88 @@ func normalizeBedrock(m map[string]any) canonical.NormalizationReport {
 		r.Record.LatencyMS = &lat
 	}
 	return r
+}
+
+func normalizePydanticAI(m map[string]any) canonical.NormalizationReport {
+	// Pydantic AI emits OpenTelemetry-compatible attributes. Keep this adapter
+	// explicit so framework-specific attributes can evolve independently.
+	r := normalizeOTel(m)
+	a := attributes(m)
+	if agent := firstString(a, "pydantic_ai.agent_name", "gen_ai.agent.name"); agent != "" {
+		if r.Record.Attributes == nil {
+			r.Record.Attributes = map[string]string{}
+		}
+		r.Record.Attributes["gen_ai.agent.name"] = agent
+	}
+	return r
+}
+
+func normalizeEino(m map[string]any) canonical.NormalizationReport {
+	r := base(m)
+	r.Record.Operation = mapEinoOperation(firstString(m, "component", "component_type", "span.component"))
+	if op := firstString(m, "operation", "operation_name"); op != "" {
+		r.Record.Operation = op
+	}
+	r.Record.Provider = firstString(m, "provider", "vendor")
+	r.Record.Model = firstString(m, "model", "model_name")
+	r.Record.InputTokens = firstInt(m, "input_tokens", "usage.input_tokens", "usage.prompt_tokens")
+	r.Record.OutputTokens = firstInt(m, "output_tokens", "usage.output_tokens", "usage.completion_tokens")
+	r.Record.TotalTokens = firstInt(m, "total_tokens", "usage.total_tokens")
+	if r.Record.TotalTokens == 0 {
+		r.Record.TotalTokens = r.Record.InputTokens + r.Record.OutputTokens
+	}
+	if lat, ok := number(path(m, "latency_ms")); ok {
+		r.Record.LatencyMS = &lat
+	}
+	return r
+}
+
+func mapEinoOperation(component string) string {
+	switch strings.ToLower(strings.TrimSpace(component)) {
+	case "chatmodel", "chat_model", "model":
+		return "chat"
+	case "tool", "toolnode":
+		return "execute_tool"
+	case "retriever", "retrieval":
+		return "retrieval"
+	default:
+		return ""
+	}
+}
+
+func normalizeGenkit(m map[string]any) canonical.NormalizationReport {
+	r := base(m)
+	r.Record.Operation = mapGenkitOperation(firstString(m, "span_type", "type", "operation"))
+	provider, modelName := splitProviderModel(firstString(m, "model", "model_name"))
+	r.Record.Provider, r.Record.Model = provider, modelName
+	r.Record.InputTokens = firstInt(m, "usage.inputTokens", "usage.input_tokens", "usage.promptTokens")
+	r.Record.OutputTokens = firstInt(m, "usage.outputTokens", "usage.output_tokens", "usage.completionTokens")
+	r.Record.TotalTokens = firstInt(m, "usage.totalTokens", "usage.total_tokens")
+	if r.Record.TotalTokens == 0 {
+		r.Record.TotalTokens = r.Record.InputTokens + r.Record.OutputTokens
+	}
+	return r
+}
+
+func mapGenkitOperation(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "generate", "model", "chat":
+		return "chat"
+	case "tool", "tool_run":
+		return "execute_tool"
+	case "retrieve", "retrieval":
+		return "retrieval"
+	default:
+		return v
+	}
+}
+
+func splitProviderModel(v string) (string, string) {
+	parts := strings.SplitN(v, "/", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "", v
 }
 
 func base(m map[string]any) canonical.NormalizationReport {

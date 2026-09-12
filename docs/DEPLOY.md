@@ -37,8 +37,11 @@ candidate_model_id = "..."
 oracle_model_id_a = "..."
 oracle_model_id_b = "..."
 replay_model_id = "..."
+mapping_model_id = "..."
 honeycomb_api_key_secret_arn = "arn:aws:secretsmanager:..."
 ```
+
+Set `model_pricing_json` to a versioned catalog containing rates verified for the exact candidate/replay model IDs if you want dollar-cost fields. Unknown models intentionally produce no fabricated cost.
 
 Using the same model for both oracle slots is valid for an infrastructure smoke test, but using independent models gives disagreement a more meaningful interpretation.
 
@@ -56,6 +59,7 @@ ecr_repository_url
 event_bus_name
 evaluation_state_machine_arn
 replay_state_machine_arn
+mapping_state_machine_arn
 corpus_bucket
 eval_table
 ```
@@ -83,7 +87,7 @@ Then inspect:
 4. Step Functions: `genai-observability-evaluation` shows four parallel evaluator branches, consensus, and normalization.
 5. S3: `evaluations/<trace-id>.json` and `corpus/production/<trace-id>.json` exist.
 6. DynamoDB: `TRACE#<trace-id>` has an `EVAL#...` record.
-7. Honeycomb: services `genai-observability-app` and `genai-observability-evaluator` appear.
+7. Honeycomb: the ECS app plus instrumented evaluator/replay Lambda service names appear, with asynchronous spans sharing propagated trace context.
 
 ## Verify replay
 
@@ -91,7 +95,7 @@ Then inspect:
 ./scripts/replay.sh '<alternate-model-id>' replay-v2
 ```
 
-Inspect the `genai-observability-replay` state machine. Each corpus item invokes the alternate model and publishes a fresh evaluation event. New corpus/evaluation records include `replay.of_trace_id` in the request attributes.
+Inspect the `genai-observability-replay` state machine. Each corpus item invokes the alternate model and publishes a fresh evaluation event. New evaluation records include `replay.of_trace_id` in the request attributes. Replay outputs are excluded from `corpus/production/`. After replay evaluation completes, inspect `replay-comparisons/<replay-trace-id>.json` for quality, cost, and latency deltas.
 
 ## Destroy
 

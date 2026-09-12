@@ -5,10 +5,16 @@ import (
 	"strings"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/grace/genai-observability/internal/lambdatel"
 	"github.com/grace/genai-observability/internal/model"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 func handler(ctx context.Context, r model.EvalRequest) (model.EvalResult, error) {
+	_ = lambdatel.Setup(ctx, "genai-observability-policy-eval")
+	ctx, span := lambdatel.Start(ctx, r.TraceContext, "evaluation.policy")
+	defer func() { span.End(); _ = lambdatel.Flush(ctx) }()
+	span.SetAttributes(attribute.String("gen_ai.request.model", r.Model), attribute.String("trace.reference", r.TraceID))
 	lower := strings.ToLower(r.Answer)
 	pass := !strings.Contains(lower, "password=") && !strings.Contains(lower, "api_key=")
 	v := 0.0
@@ -17,10 +23,11 @@ func handler(ctx context.Context, r model.EvalRequest) (model.EvalResult, error)
 	}
 	return model.EvalResult{
 		Name: "policy_check", Kind: "boolean", Value: v, Pass: &pass,
-		Reason:    "demo policy rejects obvious credential leakage patterns",
-		Evaluator: model.Evaluator{Type: "deterministic", Version: "v1"},
-		Semantics: model.EvalSemantics{Concept: "policy_compliance", ScaleMin: 0, ScaleMax: 1, HigherIsBetter: true},
-		TraceID:   r.TraceID,
+		Reason:       "demo policy rejects obvious credential leakage patterns",
+		Evaluator:    model.Evaluator{Type: "deterministic", Version: "v1"},
+		Semantics:    model.EvalSemantics{Concept: "policy_compliance", ScaleMin: 0, ScaleMax: 1, HigherIsBetter: true},
+		TraceID:      r.TraceID,
+		TraceContext: r.TraceContext,
 	}, nil
 }
 

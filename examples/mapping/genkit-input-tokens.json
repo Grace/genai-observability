@@ -1,0 +1,22 @@
+{
+  "id": "genkit-input-tokens-to-otel-v1",
+  "source": {
+    "system": "genkit",
+    "version": "example",
+    "field": "usage.inputTokens",
+    "type": "integer",
+    "unit": "tokens",
+    "description": "Number of input tokens consumed by the model invocation"
+  },
+  "target": {
+    "system": "opentelemetry-genai",
+    "version": "current",
+    "field": "gen_ai.usage.input_tokens",
+    "type": "integer",
+    "unit": "tokens",
+    "description": "Input token usage for a GenAI operation"
+  },
+  "context": [
+    "Example descriptions are supplied by the integration author; production analysis should retain source-document references."
+  ]
+}

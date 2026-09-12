@@ -1,0 +1,9 @@
+{
+  "version": "2026-09-portfolio-v1",
+  "currency": "USD",
+  "unit": "per_1m_tokens",
+  "models": {
+    "example.candidate-model-v1": {"input": 3.0, "output": 15.0},
+    "example.replay-model-v1": {"input": 0.8, "output": 4.0}
+  }
+}

@@ -13,7 +13,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/grace/genai-observability/internal/lambdatel"
 	"github.com/grace/genai-observability/internal/model"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type oracleJSON struct {
@@ -34,11 +36,15 @@ func init() {
 }
 
 func handler(ctx context.Context, r model.EvalRequest) (model.EvalResult, error) {
+	_ = lambdatel.Setup(ctx, "genai-observability-oracle-eval")
+	ctx, span := lambdatel.Start(ctx, r.TraceContext, "evaluation.oracle")
+	defer func() { span.End(); _ = lambdatel.Flush(ctx) }()
 	modelID := os.Getenv("BEDROCK_MODEL_ID")
 	judge := os.Getenv("JUDGE_NAME")
 	if judge == "" {
 		judge = "oracle"
 	}
+	span.SetAttributes(attribute.String("evaluation.judge", judge), attribute.String("gen_ai.request.model", r.Model), attribute.String("trace.reference", r.TraceID))
 	if modelID == "" {
 		return model.EvalResult{}, fmt.Errorf("BEDROCK_MODEL_ID is required")
 	}
@@ -75,6 +81,6 @@ func handler(ctx context.Context, r model.EvalRequest) (model.EvalResult, error)
 	if parsed.Confidence > 1 {
 		parsed.Confidence = 1
 	}
-	return model.EvalResult{Name: "groundedness", Kind: "probability", Value: parsed.Score, Confidence: &parsed.Confidence, Reason: parsed.Reason, Evaluator: model.Evaluator{Type: "llm_judge", Provider: "aws.bedrock", Model: modelID, Version: judge}, Semantics: model.EvalSemantics{Concept: "groundedness", ScaleMin: 0, ScaleMax: 1, HigherIsBetter: true, Unit: "probability"}, TraceID: r.TraceID}, nil
+	return model.EvalResult{Name: "groundedness", Kind: "probability", Value: parsed.Score, Confidence: &parsed.Confidence, Reason: parsed.Reason, Evaluator: model.Evaluator{Type: "llm_judge", Provider: "aws.bedrock", Model: modelID, Version: judge}, Semantics: model.EvalSemantics{Concept: "groundedness", ScaleMin: 0, ScaleMax: 1, HigherIsBetter: true, Unit: "probability"}, TraceID: r.TraceID, TraceContext: r.TraceContext}, nil
 }
 func main() { lambda.Start(handler) }

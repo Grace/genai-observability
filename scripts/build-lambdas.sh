@@ -21,5 +21,10 @@ build_one ./lambda/oracle-eval oracle-eval-b
 build_one ./lambda/consensus consensus
 build_one ./lambda/normalizer normalizer
 build_one ./lambda/replay-worker replay-worker
+build_one ./lambda/mapping-agent mapping-semantic
+build_one ./lambda/mapping-agent mapping-otel
+build_one ./lambda/mapping-agent mapping-loss
+build_one ./lambda/mapping-agent mapping-reviewer
+build_one ./lambda/mapping-aggregate mapping-aggregate
 
 echo "Lambda packages are in $BUILD"

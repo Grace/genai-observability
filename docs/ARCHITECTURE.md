@@ -10,6 +10,9 @@ flowchart LR
     L[OpenLLMetry] --> A
     B[Braintrust] --> A
     BR[Bedrock] --> A
+    PAI[Pydantic AI] --> A
+    E[Eino] --> A
+    G[Genkit] --> A
     A --> M[GenAI telemetry model v1]
     M --> N[Validation + normalization]
     N --> R[Normalization report]
@@ -88,6 +91,7 @@ The telemetry normalizer follows the same rule: a numerical value is not made co
 evaluations/<trace-id>.json         # normalized evaluation output
 corpus/production/<trace-id>.json   # replay input corpus
 replay-runs/...                     # Distributed Map result writer output
+replay-comparisons/<trace-id>.json  # post-evaluation quality/cost/latency deltas
 ```
 
 DynamoDB stores operational evaluation state. Honeycomb remains the analytical observability surface.
@@ -103,8 +107,19 @@ flowchart LR
     EB --> EH[Same Evaluation Harness]
 ```
 
-Replay outputs carry `replay.of_trace_id` and are deliberately excluded from `corpus/production/`, preventing replay-generated cases from recursively expanding the replay corpus.
+Replay outputs carry `replay.of_trace_id` and are deliberately excluded from `corpus/production/`, preventing replay-generated cases from recursively expanding the replay corpus. The replay worker records candidate usage, latency, and price-derived cost. After the replay evaluation finishes, the evaluation normalizer loads the baseline evaluation and writes a comparison artifact with quality, cost, and latency deltas.
 
 ## 7. Failure philosophy
 
 The system prefers an explicit warning/error over a silent semantic guess. Examples include unknown evaluation-score semantics, incompatible token accounting, missing required canonical fields, and version-specific schema drift.
+
+## Semantic mapping control plane
+
+A separate Step Functions state machine analyzes proposed source→target mappings with three specialized Bedrock-backed agents (semantic, OTel, information loss), followed by an adversarial reviewer and a deterministic aggregation policy. The output is a `MappingAssessment`; it is advisory and cannot modify runtime adapters. Accepted changes are implemented as normal versioned Go mappings and conformance fixtures.
+
+See `docs/SEMANTIC_MAPPING.md`.
+
+
+## 8. Async trace propagation
+
+The production request injects W3C trace context into the evaluation payload. Evaluator Lambdas extract that remote parent before starting spans; consensus and persistence carry the same context forward. Replay starts as a child of the original production context and injects its own current context into the replay evaluation request. This produces causal traces across HTTP, EventBridge, Step Functions, and Lambda boundaries rather than only correlating by a string ID.

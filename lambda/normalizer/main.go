@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -14,13 +15,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	ddbtypes "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
+	"github.com/grace/genai-observability/internal/lambdatel"
 	"github.com/grace/genai-observability/internal/model"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
 type Input struct {
@@ -31,7 +28,6 @@ type Input struct {
 
 var s3c *s3.Client
 var ddb *dynamodb.Client
-var sm *secretsmanager.Client
 
 func init() {
 	cfg, err := config.LoadDefaultConfig(context.Background())
@@ -40,10 +36,26 @@ func init() {
 	}
 	s3c = s3.NewFromConfig(cfg)
 	ddb = dynamodb.NewFromConfig(cfg)
-	sm = secretsmanager.NewFromConfig(cfg)
 }
 
 func handler(ctx context.Context, in Input) (model.HarnessOutput, error) {
+	_ = lambdatel.Setup(ctx, "genai-observability-normalizer")
+	ctx, span := lambdatel.Start(ctx, in.Request.TraceContext, "evaluation.persist")
+	defer func() { span.End(); _ = lambdatel.Flush(ctx) }()
+	span.SetAttributes(
+		attribute.String("trace.reference", in.Request.TraceID),
+		attribute.String("gen_ai.request.model", in.Request.Model),
+		attribute.String("prompt.version", in.Request.PromptVersion),
+		attribute.Int64("gen_ai.usage.input_tokens", in.Request.InputTokens),
+		attribute.Int64("gen_ai.usage.output_tokens", in.Request.OutputTokens),
+		attribute.Float64("gen_ai.response.latency_ms", in.Request.LatencyMS),
+		attribute.Float64("evaluation.mean", in.Consensus.MeanScore),
+		attribute.Float64("evaluation.judge_agreement", in.Consensus.JudgeAgreement),
+	)
+	if in.Request.CostUSD != nil {
+		span.SetAttributes(attribute.Float64("gen_ai.usage.cost_usd", *in.Request.CostUSD), attribute.String("gen_ai.usage.pricing_version", in.Request.PricingVersion))
+	}
+
 	out := model.HarnessOutput{Request: in.Request, Results: in.Results, Consensus: in.Consensus}
 	payload, _ := json.MarshalIndent(out, "", "  ")
 	bucket := os.Getenv("CORPUS_BUCKET")
@@ -70,41 +82,63 @@ func handler(ctx context.Context, in Input) (model.HarnessOutput, error) {
 			return out, err
 		}
 	}
-	_ = exportHoneycomb(ctx, out)
-	return out, nil
-}
-
-func exportHoneycomb(ctx context.Context, out model.HarnessOutput) error {
-	key := os.Getenv("HONEYCOMB_API_KEY")
-	if key == "" {
-		if arn := os.Getenv("HONEYCOMB_API_KEY_SECRET_ARN"); arn != "" {
-			sec, e := sm.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: aws.String(arn)})
-			if e == nil && sec.SecretString != nil {
-				key = *sec.SecretString
+	if baselineTraceID, replay := in.Request.Attributes["replay.of_trace_id"]; replay && bucket != "" {
+		comparison, err := buildReplayComparison(ctx, bucket, baselineTraceID, out)
+		if err != nil {
+			span.RecordError(err)
+		} else {
+			span.SetAttributes(
+				attribute.Float64("replay.quality_delta", comparison.QualityDelta),
+				attribute.Float64("replay.latency_delta_ms", comparison.LatencyDeltaMS),
+			)
+			if comparison.CostDeltaUSD != nil {
+				span.SetAttributes(attribute.Float64("replay.cost_delta_usd", *comparison.CostDeltaUSD))
+			}
+			cb, _ := json.MarshalIndent(comparison, "", "  ")
+			key := fmt.Sprintf("replay-comparisons/%s.json", in.Request.TraceID)
+			if _, err := s3c.PutObject(ctx, &s3.PutObjectInput{Bucket: aws.String(bucket), Key: aws.String(key), Body: strings.NewReader(string(cb)), ContentType: aws.String("application/json")}); err != nil {
+				return out, err
 			}
 		}
 	}
-	if key == "" {
-		return nil
-	}
-	endpoint := os.Getenv("HONEYCOMB_OTLP_ENDPOINT")
-	if endpoint == "" {
-		endpoint = "api.honeycomb.io"
-	}
-	exp, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpoint(endpoint), otlptracehttp.WithHeaders(map[string]string{"x-honeycomb-team": key}), otlptracehttp.WithURLPath("/v1/traces"))
-	if err != nil {
-		return err
-	}
-	res, _ := resource.New(ctx, resource.WithAttributes(semconv.ServiceName("genai-observability-evaluator")))
-	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp), sdktrace.WithResource(res))
-	defer tp.Shutdown(ctx)
-	tr := tp.Tracer("genai-observability/evaluation")
-	_, span := tr.Start(ctx, "gen_ai.evaluation")
-	span.SetAttributes(attribute.String("trace.reference", out.Request.TraceID), attribute.String("gen_ai.request.model", out.Request.Model), attribute.String("prompt.version", out.Request.PromptVersion), attribute.Float64("evaluation.mean", out.Consensus.MeanScore), attribute.Float64("evaluation.judge_agreement", out.Consensus.JudgeAgreement), attribute.Float64("evaluation.max_disagreement", out.Consensus.MaxDisagreement), attribute.Int("evaluation.judge_count", out.Consensus.JudgeCount))
-	for i, r := range out.Results {
-		span.SetAttributes(attribute.String(fmt.Sprintf("evaluation.%d.name", i), r.Name), attribute.Float64(fmt.Sprintf("evaluation.%d.value", i), r.Value), attribute.String(fmt.Sprintf("evaluation.%d.concept", i), r.Semantics.Concept), attribute.String(fmt.Sprintf("evaluation.%d.evaluator", i), r.Evaluator.Provider+":"+r.Evaluator.Model))
-	}
-	span.End()
-	return tp.ForceFlush(ctx)
+	return out, nil
 }
+
+func buildReplayComparison(ctx context.Context, bucket, baselineTraceID string, replay model.HarnessOutput) (model.ReplayComparison, error) {
+	obj, err := s3c.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(bucket), Key: aws.String("evaluations/" + baselineTraceID + ".json")})
+	if err != nil {
+		return model.ReplayComparison{}, err
+	}
+	defer obj.Body.Close()
+	raw, err := io.ReadAll(obj.Body)
+	if err != nil {
+		return model.ReplayComparison{}, err
+	}
+	var baseline model.HarnessOutput
+	if err := json.Unmarshal(raw, &baseline); err != nil {
+		return model.ReplayComparison{}, err
+	}
+	c := model.ReplayComparison{
+		BaselineTraceID:   baselineTraceID,
+		ReplayTraceID:     replay.Request.TraceID,
+		BaselineModel:     baseline.Request.Model,
+		ReplayModel:       replay.Request.Model,
+		QualityBaseline:   baseline.Consensus.MeanScore,
+		QualityReplay:     replay.Consensus.MeanScore,
+		QualityDelta:      replay.Consensus.MeanScore - baseline.Consensus.MeanScore,
+		CostBaselineUSD:   baseline.Request.CostUSD,
+		CostReplayUSD:     replay.Request.CostUSD,
+		LatencyBaselineMS: baseline.Request.LatencyMS,
+		LatencyReplayMS:   replay.Request.LatencyMS,
+		LatencyDeltaMS:    replay.Request.LatencyMS - baseline.Request.LatencyMS,
+		PricingVersion:    replay.Request.PricingVersion,
+		ObservedAt:        time.Now().UTC(),
+	}
+	if baseline.Request.CostUSD != nil && replay.Request.CostUSD != nil {
+		d := *replay.Request.CostUSD - *baseline.Request.CostUSD
+		c.CostDeltaUSD = &d
+	}
+	return c, nil
+}
+
 func main() { lambda.Start(handler) }

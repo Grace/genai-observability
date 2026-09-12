@@ -14,6 +14,9 @@ jobs:
           go-version: '1.23.x'
           cache: true
       - run: go mod tidy
+      - run: git diff --exit-code -- go.mod go.sum
+      - run: go build ./...
+      - run: go vet ./...
       - run: go test ./...
 
   terraform:
@@ -26,3 +29,26 @@ jobs:
       - run: terraform -chdir=infra fmt -check -recursive
       - run: terraform -chdir=infra init -backend=false
       - run: terraform -chdir=infra validate
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run build
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n scripts/*.sh
+      - uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: ./scripts
+      - run: grep -RInE '(^|[|;&[:space:]])python([[:space:]]|$)' scripts && exit 1 || true

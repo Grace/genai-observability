@@ -1,0 +1,1 @@
+{"source":"genkit","version":"example","payload":{"trace_id":"trace-genkit","span_type":"generate","model":"openai/gpt-4.1","usage":{"inputTokens":125,"outputTokens":61}}}

@@ -52,3 +52,20 @@ func TestTokenMismatchIsVisible(t *testing.T) {
 		t.Fatal("expected mismatch warning")
 	}
 }
+
+func TestFrameworkAdaptersNormalizeEquivalentInvocation(t *testing.T) {
+	cases := []Request{
+		{Source: "pydanticai", Payload: []byte(`{"attributes":{"gen_ai.operation.name":"chat","gen_ai.provider.name":"openai","gen_ai.request.model":"gpt-4.1","gen_ai.usage.input_tokens":125,"gen_ai.usage.output_tokens":61}}`)},
+		{Source: "eino", Payload: []byte(`{"component":"ChatModel","provider":"openai","model":"gpt-4.1","input_tokens":125,"output_tokens":61}`)},
+		{Source: "genkit", Payload: []byte(`{"span_type":"generate","model":"openai/gpt-4.1","usage":{"inputTokens":125,"outputTokens":61}}`)},
+	}
+	for _, tc := range cases {
+		r, err := Run(tc)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.Source, err)
+		}
+		if r.Record.Operation != "chat" || r.Record.Provider != "openai" || r.Record.Model != "gpt-4.1" || r.Record.TotalTokens != 186 {
+			t.Fatalf("%s normalized unexpectedly: %+v", tc.Source, r.Record)
+		}
+	}
+}

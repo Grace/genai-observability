@@ -7,6 +7,6 @@ for fixture in otel openllmetry braintrust bedrock; do
   echo "== $fixture =="
   curl -fsS -X POST "$URL/normalize" \
     -H 'content-type: application/json' \
-    --data-binary @"$ROOT/examples/normalization/$fixture.json" | python -m json.tool
+    --data-binary @"$ROOT/examples/normalization/$fixture.json" | python3 -m json.tool
   echo
 done

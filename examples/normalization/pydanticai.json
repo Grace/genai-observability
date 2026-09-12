@@ -1,0 +1,1 @@
+{"source":"pydanticai","version":"example","payload":{"trace_id":"trace-pydantic","attributes":{"gen_ai.operation.name":"chat","gen_ai.provider.name":"openai","gen_ai.request.model":"gpt-4.1","gen_ai.usage.input_tokens":125,"gen_ai.usage.output_tokens":61,"pydantic_ai.agent_name":"support-agent"}}}

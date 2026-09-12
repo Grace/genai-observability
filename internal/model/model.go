@@ -3,27 +3,34 @@ package model
 import "time"
 
 type EvalRequest struct {
-	TraceID       string            `json:"trace_id"`
-	SpanID        string            `json:"span_id,omitempty"`
-	Question      string            `json:"question"`
-	Answer        string            `json:"answer"`
-	Evidence      []string          `json:"evidence,omitempty"`
-	Model         string            `json:"model,omitempty"`
-	PromptVersion string            `json:"prompt_version,omitempty"`
-	Attributes    map[string]string `json:"attributes,omitempty"`
-	ObservedAt    time.Time         `json:"observed_at,omitempty"`
+	TraceID        string            `json:"trace_id"`
+	SpanID         string            `json:"span_id,omitempty"`
+	Question       string            `json:"question"`
+	Answer         string            `json:"answer"`
+	Evidence       []string          `json:"evidence,omitempty"`
+	Model          string            `json:"model,omitempty"`
+	PromptVersion  string            `json:"prompt_version,omitempty"`
+	Attributes     map[string]string `json:"attributes,omitempty"`
+	TraceContext   map[string]string `json:"trace_context,omitempty"`
+	InputTokens    int64             `json:"input_tokens,omitempty"`
+	OutputTokens   int64             `json:"output_tokens,omitempty"`
+	LatencyMS      float64           `json:"latency_ms,omitempty"`
+	CostUSD        *float64          `json:"cost_usd,omitempty"`
+	PricingVersion string            `json:"pricing_version,omitempty"`
+	ObservedAt     time.Time         `json:"observed_at,omitempty"`
 }
 
 type EvalResult struct {
-	Name       string        `json:"name"`
-	Kind       string        `json:"kind"`
-	Value      float64       `json:"value"`
-	Pass       *bool         `json:"pass,omitempty"`
-	Confidence *float64      `json:"confidence,omitempty"`
-	Reason     string        `json:"reason,omitempty"`
-	Evaluator  Evaluator     `json:"evaluator"`
-	Semantics  EvalSemantics `json:"semantics"`
-	TraceID    string        `json:"trace_id"`
+	Name         string            `json:"name"`
+	Kind         string            `json:"kind"`
+	Value        float64           `json:"value"`
+	Pass         *bool             `json:"pass,omitempty"`
+	Confidence   *float64          `json:"confidence,omitempty"`
+	Reason       string            `json:"reason,omitempty"`
+	Evaluator    Evaluator         `json:"evaluator"`
+	Semantics    EvalSemantics     `json:"semantics"`
+	TraceID      string            `json:"trace_id"`
+	TraceContext map[string]string `json:"trace_context,omitempty"`
 }
 
 type Evaluator struct {
@@ -62,4 +69,22 @@ type ReplayCase struct {
 	Model         string            `json:"model,omitempty"`
 	PromptVersion string            `json:"prompt_version,omitempty"`
 	Attributes    map[string]string `json:"attributes,omitempty"`
+}
+
+type ReplayComparison struct {
+	BaselineTraceID   string    `json:"baseline_trace_id"`
+	ReplayTraceID     string    `json:"replay_trace_id"`
+	BaselineModel     string    `json:"baseline_model,omitempty"`
+	ReplayModel       string    `json:"replay_model,omitempty"`
+	QualityBaseline   float64   `json:"quality_baseline"`
+	QualityReplay     float64   `json:"quality_replay"`
+	QualityDelta      float64   `json:"quality_delta"`
+	CostBaselineUSD   *float64  `json:"cost_baseline_usd,omitempty"`
+	CostReplayUSD     *float64  `json:"cost_replay_usd,omitempty"`
+	CostDeltaUSD      *float64  `json:"cost_delta_usd,omitempty"`
+	LatencyBaselineMS float64   `json:"latency_baseline_ms"`
+	LatencyReplayMS   float64   `json:"latency_replay_ms"`
+	LatencyDeltaMS    float64   `json:"latency_delta_ms"`
+	PricingVersion    string    `json:"pricing_version,omitempty"`
+	ObservedAt        time.Time `json:"observed_at"`
 }
