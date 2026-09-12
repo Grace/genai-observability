@@ -70,3 +70,11 @@ resource "aws_lambda_function" "fn" {
     }
   }
 }
+
+# Implicit Lambda log groups never expire, which is both a cost leak and a
+# reason nobody notices they are empty.
+resource "aws_cloudwatch_log_group" "lambda" {
+  for_each          = local.lambda_specs
+  name              = "/aws/lambda/${var.project}-${each.key}"
+  retention_in_days = 14
+}

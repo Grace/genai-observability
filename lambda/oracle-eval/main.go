@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strconv"
@@ -36,9 +37,16 @@ func init() {
 }
 
 func handler(ctx context.Context, r model.EvalRequest) (model.EvalResult, error) {
-	_ = lambdatel.Setup(ctx, "genai-observability-oracle-eval")
+	if err := lambdatel.Setup(ctx, "genai-observability-oracle-eval"); err != nil {
+		slog.Error("telemetry unavailable for this invocation", "err", err)
+	}
 	ctx, span := lambdatel.Start(ctx, r.TraceContext, "evaluation.oracle")
-	defer func() { span.End(); _ = lambdatel.Flush(ctx) }()
+	defer func() {
+		span.End()
+		if err := lambdatel.Flush(ctx); err != nil {
+			slog.Error("span flush failed", "err", err)
+		}
+	}()
 	modelID := os.Getenv("BEDROCK_MODEL_ID")
 	judge := os.Getenv("JUDGE_NAME")
 	if judge == "" {

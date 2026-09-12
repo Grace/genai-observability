@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -76,9 +77,16 @@ func handler(ctx context.Context, in Input) (ReplayComparison, error) {
 		return ReplayComparison{}, err
 	}
 
-	_ = lambdatel.Setup(ctx, "genai-observability-replay-worker")
+	if err := lambdatel.Setup(ctx, "genai-observability-replay-worker"); err != nil {
+		slog.Error("telemetry unavailable for this invocation", "err", err)
+	}
 	ctx, span := lambdatel.Start(ctx, stored.Request.TraceContext, "replay.execute")
-	defer func() { span.End(); _ = lambdatel.Flush(ctx) }()
+	defer func() {
+		span.End()
+		if err := lambdatel.Flush(ctx); err != nil {
+			slog.Error("span flush failed", "err", err)
+		}
+	}()
 
 	modelID := in.Model
 	if modelID == "" {

@@ -10,11 +10,20 @@ resource "aws_iam_role" "sfn" {
   })
 }
 
+resource "aws_cloudwatch_log_group" "sfn" {
+  for_each          = toset(["evaluation", "replay", "semantic-mapping"])
+  name              = "/aws/vendedlogs/states/${var.project}-${each.key}"
+  retention_in_days = 14
+}
+
 resource "aws_iam_role_policy" "sfn" {
   role = aws_iam_role.sfn.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
+      # Step Functions logging requires these at account scope; the service
+      # manages the log delivery resources itself.
+      { Effect = "Allow", Action = ["logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery", "logs:DeleteLogDelivery", "logs:ListLogDeliveries", "logs:PutResourcePolicy", "logs:DescribeResourcePolicies", "logs:DescribeLogGroups"], Resource = "*" },
       { Effect = "Allow", Action = ["lambda:InvokeFunction"], Resource = [for f in aws_lambda_function.fn : f.arn] },
       { Effect = "Allow", Action = ["s3:ListBucket"], Resource = aws_s3_bucket.corpus.arn },
       { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = "${aws_s3_bucket.corpus.arn}/*" },
@@ -64,6 +73,12 @@ resource "aws_sfn_state_machine" "eval" {
       }
     }
   })
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.sfn["evaluation"].arn}:*"
+    include_execution_data = true
+    level                  = "ALL"
+  }
 }
 
 resource "aws_sfn_state_machine" "replay" {
@@ -108,6 +123,12 @@ resource "aws_sfn_state_machine" "replay" {
       }
     }
   })
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.sfn["replay"].arn}:*"
+    include_execution_data = true
+    level                  = "ALL"
+  }
 }
 
 resource "aws_cloudwatch_event_rule" "eval" {
@@ -143,15 +164,45 @@ resource "aws_iam_role_policy" "eventbridge" {
   })
 }
 
+# Failed invocations are otherwise dropped silently, which is how an evaluation
+# pipeline could report "queued" while never starting a single execution.
+resource "aws_sqs_queue" "eventbridge_dlq" {
+  name                      = "${var.project}-eventbridge-dlq"
+  message_retention_seconds = 1209600
+}
+
+resource "aws_sqs_queue_policy" "eventbridge_dlq" {
+  queue_url = aws_sqs_queue.eventbridge_dlq.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sqs:SendMessage"
+      Resource  = aws_sqs_queue.eventbridge_dlq.arn
+      Condition = { ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.eval.arn } }
+    }]
+  })
+}
+
 resource "aws_cloudwatch_event_target" "sfn" {
   rule           = aws_cloudwatch_event_rule.eval.name
   event_bus_name = aws_cloudwatch_event_bus.eval.name
   arn            = aws_sfn_state_machine.eval.arn
   role_arn       = aws_iam_role.eventbridge.arn
 
-  input_transformer {
-    input_paths    = { detail = "$.detail" }
-    input_template = "<detail>"
+  # input_path forwards the detail object directly. The previous
+  # input_transformer with template "<detail>" produced input the target never
+  # accepted, and with no dead-letter queue the failure was invisible.
+  input_path = "$.detail"
+
+  dead_letter_config {
+    arn = aws_sqs_queue.eventbridge_dlq.arn
+  }
+
+  retry_policy {
+    maximum_event_age_in_seconds = 3600
+    maximum_retry_attempts       = 4
   }
 }
 
@@ -201,4 +252,10 @@ resource "aws_sfn_state_machine" "mapping" {
       }
     }
   })
+
+  logging_configuration {
+    log_destination        = "${aws_cloudwatch_log_group.sfn["semantic-mapping"].arn}:*"
+    include_execution_data = true
+    level                  = "ALL"
+  }
 }

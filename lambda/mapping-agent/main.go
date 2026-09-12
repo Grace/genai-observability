@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -44,9 +45,16 @@ func handler(ctx context.Context, input json.RawMessage) (mapping.AgentAssessmen
 		return mapping.AgentAssessment{}, fmt.Errorf("MAPPING_AGENT_ROLE and BEDROCK_MODEL_ID are required")
 	}
 	carrier := traceContextFromInput(input)
-	_ = lambdatel.Setup(ctx, "genai-observability-mapping-"+role)
+	if err := lambdatel.Setup(ctx, "genai-observability-mapping-"+role); err != nil {
+		slog.Error("telemetry unavailable for this invocation", "err", err)
+	}
 	ctx, span := lambdatel.Start(ctx, carrier, "mapping."+role)
-	defer func() { span.End(); _ = lambdatel.Flush(ctx) }()
+	defer func() {
+		span.End()
+		if err := lambdatel.Flush(ctx); err != nil {
+			slog.Error("span flush failed", "err", err)
+		}
+	}()
 	span.SetAttributes(attribute.String("mapping.agent.role", role), attribute.String("gen_ai.request.model", modelID))
 	prompt := rolePrompt(role) + `\nReturn ONLY JSON with relationship (EXACT|COMPATIBLE|NARROWER|BROADER|LOSSY|CONFLICTING|UNKNOWN), confidence 0..1, rationale, evidence[{kind,source,claim}], objections[]. Never invent documentation. UNKNOWN is preferred to unsupported equivalence.\nInput:\n` + string(input)
 	out, err := br.Converse(ctx, &bedrockruntime.ConverseInput{ModelId: aws.String(modelID), Messages: []types.Message{{Role: types.ConversationRoleUser, Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: prompt}}}}, InferenceConfig: &types.InferenceConfiguration{MaxTokens: aws.Int32(900), Temperature: aws.Float32(0)}})

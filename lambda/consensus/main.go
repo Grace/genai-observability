@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"math"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -11,13 +12,20 @@ import (
 )
 
 func handler(ctx context.Context, results []model.EvalResult) (model.Consensus, error) {
-	_ = lambdatel.Setup(ctx, "genai-observability-consensus")
+	if err := lambdatel.Setup(ctx, "genai-observability-consensus"); err != nil {
+		slog.Error("telemetry unavailable for this invocation", "err", err)
+	}
 	var carrier map[string]string
 	if len(results) > 0 {
 		carrier = results[0].TraceContext
 	}
 	ctx, span := lambdatel.Start(ctx, carrier, "evaluation.consensus")
-	defer func() { span.End(); _ = lambdatel.Flush(ctx) }()
+	defer func() {
+		span.End()
+		if err := lambdatel.Flush(ctx); err != nil {
+			slog.Error("span flush failed", "err", err)
+		}
+	}()
 	var scores []float64
 	for _, r := range results {
 		if r.Evaluator.Type == "llm_judge" && r.Semantics.Concept == "groundedness" {

@@ -2,6 +2,7 @@ package lambdatel
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"sync"
 
@@ -23,9 +24,22 @@ var (
 	tp   *sdktrace.TracerProvider
 )
 
+// Setup is called from every handler. It deliberately never fails a request:
+// telemetry trouble must not fail a Step Functions execution and re-run the
+// expensive judges. It must, however, be loud - the previous version returned an
+// error that every caller discarded, so a tracer provider that was never built
+// looked exactly like a healthy one.
+
 func Setup(ctx context.Context, service string) error {
 	var setupErr error
 	once.Do(func() {
+		// Export failures are asynchronous and otherwise invisible. Without this
+		// handler there is no way to tell "spans failed to send" from "spans were
+		// never created".
+		otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+			slog.Error("otel error", "service", service, "err", err)
+		}))
+
 		key := os.Getenv("HONEYCOMB_API_KEY")
 		if key == "" {
 			arn := os.Getenv("HONEYCOMB_API_KEY_SECRET_ARN")
@@ -49,6 +63,12 @@ func Setup(ctx context.Context, service string) error {
 		if endpoint == "" {
 			endpoint = "api.honeycomb.io"
 		}
+		// Never log the key itself, only whether one was resolved.
+		slog.Info("telemetry setup",
+			"service", service,
+			"endpoint", endpoint,
+			"api_key_present", key != "",
+			"secret_arn_configured", os.Getenv("HONEYCOMB_API_KEY_SECRET_ARN") != "")
 		opts := []otlptracehttp.Option{otlptracehttp.WithEndpoint(endpoint), otlptracehttp.WithURLPath("/v1/traces")}
 		if key != "" {
 			opts = append(opts, otlptracehttp.WithHeaders(map[string]string{"x-honeycomb-team": key}))
@@ -67,6 +87,9 @@ func Setup(ctx context.Context, service string) error {
 		otel.SetTracerProvider(tp)
 		otel.SetTextMapPropagator(propagation.TraceContext{})
 	})
+	if setupErr != nil {
+		slog.Error("telemetry setup failed; continuing without tracing", "service", service, "err", setupErr)
+	}
 	return setupErr
 }
 
@@ -75,9 +98,19 @@ func Start(ctx context.Context, carrier map[string]string, name string) (context
 	return otel.Tracer("genai-observability/lambda").Start(ctx, name)
 }
 
+// Flush exports buffered spans before the Lambda environment freezes.
+//
+// A nil provider means Setup never completed. That is reported rather than
+// returning nil, which previously made a broken setup indistinguishable from a
+// run that simply had nothing to send.
 func Flush(ctx context.Context) error {
 	if tp == nil {
+		slog.Warn("flush skipped: no tracer provider (setup did not complete)")
 		return nil
 	}
-	return tp.ForceFlush(ctx)
+	if err := tp.ForceFlush(ctx); err != nil {
+		slog.Error("span flush failed; spans for this invocation were lost", "err", err)
+		return err
+	}
+	return nil
 }

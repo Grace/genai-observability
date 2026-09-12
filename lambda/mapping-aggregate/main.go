@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -17,9 +18,16 @@ type input struct {
 }
 
 func handler(ctx context.Context, in input) (mapping.MappingAssessment, error) {
-	_ = lambdatel.Setup(ctx, "genai-observability-mapping-aggregate")
+	if err := lambdatel.Setup(ctx, "genai-observability-mapping-aggregate"); err != nil {
+		slog.Error("telemetry unavailable for this invocation", "err", err)
+	}
 	ctx, span := lambdatel.Start(ctx, in.Request.TraceContext, "mapping.aggregate")
-	defer func() { span.End(); _ = lambdatel.Flush(ctx) }()
+	defer func() {
+		span.End()
+		if err := lambdatel.Flush(ctx); err != nil {
+			slog.Error("span flush failed", "err", err)
+		}
+	}()
 	out := mapping.Aggregate(in.Request, in.Assessments, &in.Reviewer)
 	out.CreatedAt = time.Now().UTC()
 	span.SetAttributes(

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -39,9 +40,16 @@ func init() {
 }
 
 func handler(ctx context.Context, in Input) (model.HarnessOutput, error) {
-	_ = lambdatel.Setup(ctx, "genai-observability-normalizer")
+	if err := lambdatel.Setup(ctx, "genai-observability-normalizer"); err != nil {
+		slog.Error("telemetry unavailable for this invocation", "err", err)
+	}
 	ctx, span := lambdatel.Start(ctx, in.Request.TraceContext, "evaluation.persist")
-	defer func() { span.End(); _ = lambdatel.Flush(ctx) }()
+	defer func() {
+		span.End()
+		if err := lambdatel.Flush(ctx); err != nil {
+			slog.Error("span flush failed", "err", err)
+		}
+	}()
 	span.SetAttributes(
 		attribute.String("trace.reference", in.Request.TraceID),
 		attribute.String("gen_ai.request.model", in.Request.Model),
