@@ -103,3 +103,31 @@ func InNamespace(name string) bool {
 
 // Count returns how many current attributes are registered, for reporting.
 func Count() int { return len(genAIAttributes) }
+
+// extensions are attributes this repository deliberately emits inside the
+// gen_ai namespace that the convention does not define.
+//
+// Declaring them is the point. The alternative is what was here before: three
+// invented names emitted alongside real ones, indistinguishable from the
+// hallucinated attributes this package exists to reject. An extension is a
+// decision with a reason; an undeclared name is an accident.
+//
+// These are NOT valid mapping targets. A model proposing one is still inventing
+// an attribute, so Known deliberately excludes them - see Extension vs Known.
+var extensions = map[string]string{
+	"gen_ai.usage.cost_usd":        "calculated cost; semconv has no cost attribute, and gen_ai.usage.cost is the de facto spelling used elsewhere in the ecosystem",
+	"gen_ai.usage.pricing_version": "identifies the price table used, so a cost figure stays attributable after rates change",
+	"gen_ai.response.latency_ms":   "per-response latency; semconv models this as the gen_ai.client.operation.duration metric, not a span attribute",
+}
+
+// Extension reports whether name is an attribute this repository knowingly adds
+// to the gen_ai namespace, and is not part of the convention.
+func Extension(name string) bool {
+	_, ok := extensions[strings.TrimSpace(name)]
+	return ok
+}
+
+// ExtensionReason returns why an extension exists, for reporting and review.
+func ExtensionReason(name string) string {
+	return extensions[strings.TrimSpace(name)]
+}

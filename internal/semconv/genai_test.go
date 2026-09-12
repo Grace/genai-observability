@@ -50,3 +50,20 @@ func TestInNamespace(t *testing.T) {
 		t.Error("llm.* is not the gen_ai namespace")
 	}
 }
+
+func TestExtensionsAreNotValidMappingTargets(t *testing.T) {
+	// An extension is something this repository chooses to emit. A model
+	// proposing one as a mapping target is still inventing an attribute, so
+	// Known must keep excluding them.
+	for _, a := range []string{"gen_ai.usage.cost_usd", "gen_ai.usage.pricing_version", "gen_ai.response.latency_ms"} {
+		if !Extension(a) {
+			t.Errorf("Extension(%q) = false, want true", a)
+		}
+		if Known(a) {
+			t.Errorf("Known(%q) = true; an extension must not be a valid mapping target", a)
+		}
+		if ExtensionReason(a) == "" {
+			t.Errorf("extension %q has no stated reason", a)
+		}
+	}
+}

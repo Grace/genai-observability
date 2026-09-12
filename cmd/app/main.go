@@ -110,7 +110,13 @@ func (a *app) normalize(w http.ResponseWriter, r *http.Request) {
 		attribute.String("gen_ai.request.model", report.Record.Model),
 		attribute.Int64("gen_ai.usage.input_tokens", report.Record.InputTokens),
 		attribute.Int64("gen_ai.usage.output_tokens", report.Record.OutputTokens),
-		attribute.Int64("gen_ai.usage.total_tokens", report.Record.TotalTokens),
+		// Not gen_ai.usage.total_tokens: semantic conventions 1.41.0 define
+		// input_tokens and output_tokens but no total. Emitting a total under the
+		// gen_ai namespace would invent an attribute in someone else's namespace,
+		// which is the exact failure this service reports on its inputs. The value
+		// is still carried, because a reported total that disagrees with the sum
+		// is evidence - see the usage_mismatch warning in internal/normalize.
+		attribute.Int64("telemetry.usage.total_tokens", report.Record.TotalTokens),
 		attribute.String("telemetry.source", report.Record.Source.System),
 		attribute.Int("normalization.warning_count", len(report.Warnings)),
 		attribute.Int("normalization.error_count", len(report.Errors)),

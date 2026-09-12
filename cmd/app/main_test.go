@@ -1,9 +1,12 @@
 package main
 
 import (
+	"os"
+	"regexp"
 	"testing"
 
 	"github.com/grace/genai-observability/internal/canonical"
+	"github.com/grace/genai-observability/internal/semconv"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -83,5 +86,30 @@ func TestIssueAttributesSkipsBlankFields(t *testing.T) {
 	}
 	if _, ok := find(attrs, "normalization.error.fields"); ok {
 		t.Fatal("expected no fields attribute when no issue carries a field")
+	}
+}
+
+// semconv 1.41.0 defines gen_ai.usage.input_tokens and output_tokens but no
+// total. Emitting a total under the gen_ai namespace would invent an attribute
+// in a namespace this service does not own - the same defect it reports on its
+// inputs - so the total is carried under telemetry.* instead.
+func TestNoInventedGenAIAttributesAreEmitted(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	// Only attribute keys, not span names: a span may legitimately be called
+	// "gen_ai.request" without that being an attribute claim.
+	re := regexp.MustCompile(`attribute\.[A-Za-z0-9]+\("(gen_ai\.[a-z0-9_.]+)"`)
+	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
+		name := m[1]
+		if semconv.Known(name) {
+			continue
+		}
+		if semconv.Extension(name) {
+			// Declared, with a reason. Allowed, and visible in review.
+			continue
+		}
+		t.Errorf("main.go emits %q, which is neither defined in semantic conventions %s nor declared as an extension in internal/semconv", name, semconv.Version)
 	}
 }
