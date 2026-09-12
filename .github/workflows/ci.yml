@@ -56,6 +56,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash -n scripts/*.sh
+      # A diagram that drifts from its source is how the architecture starts
+      # describing a system that does not exist.
+      - run: sudo apt-get update && sudo apt-get install -y graphviz
+      - run: ./scripts/check-diagram.sh
       - uses: ludeeus/action-shellcheck@master
         with:
           scandir: ./scripts

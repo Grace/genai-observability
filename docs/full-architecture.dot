@@ -1,3 +1,11 @@
+// Architecture of the deployed system.
+//
+// This is the authoritative diagram: it is the source the committed PNG and SVG
+// are rendered from, so it can be diffed and reviewed like code. Every element
+// below corresponds to something that exists in this repository. If a component
+// is proposed rather than built, it does not belong here.
+//
+// Render with: make diagram   (requires graphviz)
 digraph G {
   rankdir=LR;
   graph [pad="0.2", nodesep="0.35", ranksep="0.6"];
@@ -7,13 +15,13 @@ digraph G {
   subgraph cluster_runtime {
     label="Runtime normalization plane";
     client [label="Client / framework telemetry"];
-    alb [label="ALB"];
-    ecs [label="ECS Fargate\nGo app + /normalize"];
+    alb [label="ALB\ningress restricted to allowed_cidrs"];
+    ecs [label="ECS Fargate\nGo app + /ask + /normalize"];
     adapters [label="Source adapters\nOTel / OpenLLMetry / Braintrust\nPydantic AI / Eino / Genkit / Bedrock"];
     canonical [label="Canonical GenAI\ntelemetry model"];
     report [label="Normalization report\nwarnings + errors"];
-    inspector [label="React + TypeScript\nNormalization Inspector"];
-    adot [label="ADOT Collector"];
+    inspector [label="React + TypeScript\nNormalization Inspector\n(run locally against the API)"];
+    adot [label="ADOT Collector\nsidecar"];
     honeycomb [label="Honeycomb"];
     client -> alb -> ecs -> adapters -> canonical;
     canonical -> report -> inspector;
@@ -22,8 +30,9 @@ digraph G {
 
   subgraph cluster_eval {
     label="Evaluation + counterfactual replay";
-    eventbridge [label="EventBridge\nW3C trace context"];
-    evalsfn [label="Step Functions\nevaluation harness"];
+    eventbridge [label="EventBridge\ntraceparent in event detail"];
+    dlq [label="Dead-letter queue\nfailed invocations"];
+    evalsfn [label="Step Functions\nevaluation harness\nlogging: ALL"];
     judges [label="Schema + policy +\nLLM judges"];
     consensus [label="Consensus / disagreement"];
     storage [label="S3 + DynamoDB"];
@@ -32,6 +41,7 @@ digraph G {
     price [label="Versioned pricing\ntoken -> USD"];
     compare [label="Replay comparison\nquality / cost / latency deltas"];
     ecs -> eventbridge -> evalsfn -> judges -> consensus -> storage;
+    eventbridge -> dlq [style=dashed, label="delivery failure"];
     storage -> replay -> altmodel -> price -> eventbridge;
     consensus -> honeycomb;
     storage -> compare;
@@ -40,7 +50,7 @@ digraph G {
   }
 
   subgraph cluster_mapping {
-    label="Semantic mapping control plane";
+    label="Semantic mapping control plane (advisory only)";
     request [label="MappingRequest\nsource + candidate target"];
     mapagents [label="Parallel agents\nsemantic / OTel / information loss"];
     reviewer [label="Adversarial reviewer"];
@@ -51,5 +61,18 @@ digraph G {
     request -> mapagents -> reviewer -> policy -> assessment -> engineer -> rule;
     rule -> adapters [style=dashed, label="implemented change"];
     mapagents -> honeycomb [style=dashed, label="agent telemetry"];
+  }
+
+  subgraph cluster_builder {
+    label="Adapter builder agent (cmd/builder)";
+    payload [label="Unsupported framework\npayload"];
+    builder [label="invoke_agent adapter-builder\nchat + execute_tool spans"];
+    semconv [label="semconv registry\ngen_ai namespace, v1.41.0"];
+    proposal [label="Field proposals\nEXACT / COMPATIBLE / LOSSY / UNKNOWN"];
+    payload -> builder -> proposal;
+    builder -> semconv [label="validate target"];
+    semconv -> proposal [style=dashed, label="unknown target -> UNKNOWN"];
+    proposal -> request [style=dashed, label="candidate mapping"];
+    builder -> honeycomb [style=dashed, label="agent trace"];
   }
 }
