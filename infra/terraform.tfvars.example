@@ -1,0 +1,12 @@
+aws_region = "us-east-1"
+project = "genai-observability"
+
+# Use Bedrock Converse-compatible model IDs or inference profile IDs enabled for your account/region.
+candidate_model_id = "amazon.nova-lite-v1:0"
+oracle_model_id_a = "amazon.nova-lite-v1:0"
+oracle_model_id_b = "amazon.nova-lite-v1:0"
+replay_model_id = "amazon.nova-lite-v1:0"
+
+# Create this secret with scripts/create-honeycomb-secret.sh; do not put the API key itself in tfvars.
+honeycomb_api_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:genai-observability/honeycomb-..."
+honeycomb_otlp_endpoint = "https://api.honeycomb.io"

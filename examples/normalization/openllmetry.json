@@ -1,0 +1,14 @@
+{
+  "source": "openllmetry",
+  "version": "example",
+  "payload": {
+    "trace_id": "trace-openllmetry",
+    "attributes": {
+      "llm.request.type": "chat",
+      "llm.vendor": "anthropic",
+      "llm.request.model": "example-model",
+      "llm.usage.prompt_tokens": 80,
+      "llm.usage.completion_tokens": 20
+    }
+  }
+}

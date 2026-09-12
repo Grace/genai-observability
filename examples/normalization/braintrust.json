@@ -1,0 +1,13 @@
+{
+  "source": "braintrust",
+  "version": "example",
+  "payload": {
+    "trace_id": "trace-braintrust",
+    "name": "answer",
+    "model": "example-model",
+    "scores": {
+      "groundedness": 0.91,
+      "relevance": 0.84
+    }
+  }
+}

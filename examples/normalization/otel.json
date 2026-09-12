@@ -1,0 +1,15 @@
+{
+  "source": "otel",
+  "version": "semconv-example",
+  "payload": {
+    "trace_id": "4fd0bfb73f8c40d0a204f54f4ee55a11",
+    "span_id": "f5d9e24a9ee9cc21",
+    "attributes": {
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": "aws.bedrock",
+      "gen_ai.request.model": "example-model",
+      "gen_ai.usage.input_tokens": 128,
+      "gen_ai.usage.output_tokens": 42
+    }
+  }
+}

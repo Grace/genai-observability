@@ -1,0 +1,15 @@
+{
+  "source": "bedrock",
+  "version": "converse-example",
+  "payload": {
+    "trace_id": "trace-bedrock",
+    "operation": "chat",
+    "modelId": "example-model",
+    "usage": {
+      "inputTokens": 100,
+      "outputTokens": 25,
+      "totalTokens": 125
+    },
+    "metrics": {"latencyMs": 842}
+  }
+}

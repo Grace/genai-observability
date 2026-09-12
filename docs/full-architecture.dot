@@ -1,0 +1,66 @@
+digraph G {
+  graph [rankdir=LR, bgcolor="white", fontname="Helvetica", nodesep=0.38, ranksep=0.7, pad=0.25];
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#5B6B7A", fontname="Helvetica", fontsize=9, margin="0.11,0.07"];
+  edge [color="#5B6B7A", arrowsize=0.65, penwidth=1.1];
+
+  subgraph cluster_norm {
+    label="Telemetry normalization"; color="#79A8D8"; style="rounded";
+    sources [label="OTel GenAI / OpenLLMetry\nBraintrust / Bedrock", shape=oval];
+    adapters [label="Source adapters"];
+    model [label="GenAI telemetry model\nversioned canonical representation"];
+    normalize [label="Validation + normalization\nambiguity/loss reported"];
+    normalized [label="OTel-aligned\nnormalized telemetry"];
+    sources -> adapters -> model -> normalize -> normalized;
+  }
+
+  subgraph cluster_prod {
+    label="Production plane"; color="#8FB3D9"; style="rounded";
+    user [label="Client", shape=oval];
+    alb [label="Application\nLoad Balancer"];
+    app [label="Go service\nECS Fargate"];
+    bedrock [label="Amazon Bedrock\nCandidate model"];
+    otel [label="ADOT Collector\nSidecar"];
+    honeyprod [label="Honeycomb\nproduction + normalized traces"];
+    eb [label="EventBridge\nEvaluationRequested"];
+    user -> alb -> app;
+    app -> bedrock;
+    app -> otel -> honeyprod;
+    app -> eb;
+    normalized -> app [label="POST /normalize"];
+  }
+
+  subgraph cluster_eval {
+    label="Evaluation plane"; color="#B0A1D9"; style="rounded";
+    sfn [label="Step Functions\nEvaluation Harness"];
+    schema [label="Schema evaluator\nLambda"];
+    policy [label="Policy evaluator\nLambda"];
+    oa [label="Oracle A\nLambda"];
+    ob [label="Oracle B\nLambda"];
+    bra [label="Bedrock judge A"];
+    brb [label="Bedrock judge B"];
+    consensus [label="Consensus +\ndisagreement"];
+    evalnorm [label="Evaluation normalizer\nGo Lambda"];
+    eb -> sfn;
+    sfn -> schema; sfn -> policy; sfn -> oa; sfn -> ob;
+    oa -> bra; ob -> brb;
+    schema -> consensus; policy -> consensus; oa -> consensus; ob -> consensus;
+    consensus -> evalnorm;
+  }
+
+  subgraph cluster_data {
+    label="Storage + observability"; color="#9AC7A7"; style="rounded";
+    s3 [label="S3\nproduction corpus + evals"];
+    ddb [label="DynamoDB\nevaluation state"];
+    honeyeval [label="Honeycomb\nevaluation telemetry"];
+    evalnorm -> s3; evalnorm -> ddb; evalnorm -> honeyeval;
+  }
+
+  subgraph cluster_replay {
+    label="Counterfactual replay"; color="#E2B48B"; style="rounded";
+    map [label="Step Functions\nDistributed Map"];
+    worker [label="Replay worker\nLambda"];
+    alt [label="Alternate Bedrock\nmodel / prompt"];
+    s3 -> map -> worker -> alt;
+    worker -> eb [label="new evaluation"];
+  }
+}

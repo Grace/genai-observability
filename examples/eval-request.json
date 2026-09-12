@@ -1,0 +1,8 @@
+{
+  "trace_id": "manual-001",
+  "question": "What color is the daytime sky on a clear day?",
+  "answer": "The sky appears blue.",
+  "evidence": ["Rayleigh scattering makes the daytime sky appear blue."],
+  "model": "manual",
+  "prompt_version": "manual-v1"
+}
