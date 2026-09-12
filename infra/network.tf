@@ -47,11 +47,13 @@ resource "aws_security_group" "alb" {
   name_prefix = "${var.project}-alb-"
   vpc_id      = aws_vpc.main.id
 
+  # The listener fronts an unauthenticated endpoint that spends Bedrock tokens per
+  # request, so ingress is restricted rather than open to the internet.
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = var.allowed_cidrs
   }
 
   egress {

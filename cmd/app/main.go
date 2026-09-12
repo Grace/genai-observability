@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	brtypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	ebtypes "github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
+	"github.com/grace/genai-observability/internal/canonical"
 	"github.com/grace/genai-observability/internal/model"
 	"github.com/grace/genai-observability/internal/normalize"
 	"github.com/grace/genai-observability/internal/pricing"
@@ -113,6 +115,11 @@ func (a *app) normalize(w http.ResponseWriter, r *http.Request) {
 		attribute.Int("normalization.warning_count", len(report.Warnings)),
 		attribute.Int("normalization.error_count", len(report.Errors)),
 	)
+	// The counts alone cannot answer "which warning started spiking, for which
+	// source, on which field" - the question this service exists to answer. Emit
+	// the codes and fields as dimensions so they can be grouped and differentiated.
+	span.SetAttributes(issueAttributes("warning", report.Warnings)...)
+	span.SetAttributes(issueAttributes("error", report.Errors)...)
 	span.End()
 	w.Header().Set("content-type", "application/json")
 	if len(report.Errors) > 0 {
@@ -216,4 +223,37 @@ func pricingCatalog() (pricing.Catalog, error) {
 		return pricing.ParseCatalogJSON(raw)
 	}
 	return pricing.DefaultCatalog()
+}
+
+// issueAttributes turns normalization issues into span dimensions. Codes and
+// fields are sorted and deduplicated so the attribute value is stable for a
+// given set of issues regardless of detection order.
+func issueAttributes(kind string, issues []canonical.Issue) []attribute.KeyValue {
+	if len(issues) == 0 {
+		return nil
+	}
+	codes := make([]string, 0, len(issues))
+	fields := make([]string, 0, len(issues))
+	seenCode := map[string]bool{}
+	seenField := map[string]bool{}
+	for _, is := range issues {
+		if is.Code != "" && !seenCode[is.Code] {
+			seenCode[is.Code] = true
+			codes = append(codes, is.Code)
+		}
+		if is.Field != "" && !seenField[is.Field] {
+			seenField[is.Field] = true
+			fields = append(fields, is.Field)
+		}
+	}
+	sort.Strings(codes)
+	sort.Strings(fields)
+	out := make([]attribute.KeyValue, 0, 2)
+	if len(codes) > 0 {
+		out = append(out, attribute.StringSlice("normalization."+kind+".codes", codes))
+	}
+	if len(fields) > 0 {
+		out = append(out, attribute.StringSlice("normalization."+kind+".fields", fields))
+	}
+	return out
 }

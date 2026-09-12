@@ -1,6 +1,12 @@
 aws_region = "us-east-1"
 project = "genai-observability"
 
+# Required. The ALB fronts an unauthenticated endpoint that spends Bedrock tokens on
+# every request, so ingress is restricted to these CIDRs. 0.0.0.0/0 is rejected by a
+# variable validation rather than being allowed by accident.
+# Find your address with: curl -s https://checkip.amazonaws.com
+allowed_cidrs = ["203.0.113.4/32"]
+
 # Use Bedrock Converse-compatible model IDs or inference profile IDs enabled for your account/region.
 candidate_model_id = "amazon.nova-lite-v1:0"
 oracle_model_id_a = "amazon.nova-lite-v1:0"

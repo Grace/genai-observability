@@ -63,3 +63,14 @@ variable "model_pricing_json" {
   description = "Versioned JSON pricing catalog used to calculate input/output token cost. Replace sample rates before production use."
   default     = ""
 }
+
+variable "allowed_cidrs" {
+  type        = list(string)
+  description = "CIDR blocks permitted to reach the ALB. The endpoint is unauthenticated and spends Bedrock tokens per request, so this must stay narrow. Set to [\"<your-ip>/32\"]; 0.0.0.0/0 is rejected."
+  default     = []
+
+  validation {
+    condition     = length(var.allowed_cidrs) > 0 && !contains(var.allowed_cidrs, "0.0.0.0/0")
+    error_message = "Set allowed_cidrs to at least one specific CIDR and not 0.0.0.0/0. Example: allowed_cidrs = [\"203.0.113.4/32\"]."
+  }
+}
