@@ -1,0 +1,14 @@
+# The image needs source only. Without this the build context was 937MB,
+# dominated by provider plugins and build artifacts the Dockerfile never reads.
+.git
+.github
+.remember
+build/
+infra/.terraform/
+infra/terraform.tfstate*
+web/node_modules/
+web/dist/
+docs/
+examples/
+*.zip
+*.md

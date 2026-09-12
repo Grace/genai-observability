@@ -11,13 +11,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23.x'
+          go-version: '1.25.x'
           cache: true
       - run: go mod tidy
       - run: git diff --exit-code -- go.mod go.sum
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
+
+  # The image was previously never built in CI, so a go.mod toolchain bump that
+  # the Dockerfile could not satisfy was only discovered during a deploy.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --platform linux/amd64 -t genai-observability-app:ci .
 
   terraform:
     runs-on: ubuntu-latest
