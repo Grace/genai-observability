@@ -20,10 +20,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/grace/genai-observability/internal/mapping"
 	"github.com/grace/genai-observability/internal/pricing"
+	"github.com/grace/genai-observability/internal/semconv"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -76,8 +78,56 @@ type FieldProposal struct {
 	SourceField  string               `json:"source_field"`
 	TargetField  string               `json:"target_field,omitempty"`
 	Relationship mapping.Relationship `json:"relationship"`
-	Confidence   float64              `json:"confidence"`
+	Confidence   Confidence           `json:"confidence"`
 	Rationale    string               `json:"rationale,omitempty"`
+}
+
+// Confidence is a 0..1 score that also accepts the qualitative labels models
+// return in practice ("HIGH", "medium", "0.8").
+//
+// Observed: Nova returns "confidence": "HIGH", a string where a number is asked
+// for. Before this type existed, that single mismatch failed the whole document
+// and every field fell through to UNKNOWN.
+//
+// A label is deliberately mapped below the auto-approval bar. "HIGH" is a mood,
+// not a calibrated probability, so it must not be able to approve a mapping on
+// its own - it lands in human review, which is the right destination for it.
+type Confidence float64
+
+const (
+	confidenceHigh   Confidence = 0.75
+	confidenceMedium Confidence = 0.50
+	confidenceLow    Confidence = 0.25
+)
+
+func (c *Confidence) UnmarshalJSON(b []byte) error {
+	var f float64
+	if err := json.Unmarshal(b, &f); err == nil {
+		*c = Confidence(f)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		// Neither a number nor a string: treat as no stated confidence rather
+		// than discarding an otherwise usable proposal.
+		*c = 0
+		return nil
+	}
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "HIGH", "VERY HIGH", "CERTAIN":
+		*c = confidenceHigh
+	case "MEDIUM", "MED", "MODERATE":
+		*c = confidenceMedium
+	case "LOW", "VERY LOW", "UNCERTAIN":
+		*c = confidenceLow
+	default:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(s), 64); err == nil {
+			*c = Confidence(f)
+			return nil
+		}
+		*c = 0
+	}
+	return nil
 }
 
 // Result is the outcome of a build session.
@@ -263,6 +313,9 @@ func proposeMapping(ctx context.Context, tr trace.Tracer, text string, fields []
 	if err := json.Unmarshal([]byte(extractJSON(text)), &parsed); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "model response was not valid JSON")
+		// Keep a bounded sample so an unparseable response is diagnosable from
+		// the trace alone, without re-running the agent.
+		span.SetAttributes(attribute.String("builder.response_sample", head(text, 300)))
 		return nil, err
 	}
 
@@ -272,16 +325,36 @@ func proposeMapping(ctx context.Context, tr trace.Tracer, text string, fields []
 	}
 	out := make([]FieldProposal, 0, len(parsed.Proposals))
 	var rejected int
+	var rejectedNames []string
+	var invalidTarget int
+	var invalidTargets []string
 	for _, p := range parsed.Proposals {
 		// A proposal for a field that is not in the payload is a hallucination;
 		// drop it rather than record it.
 		if !known[p.SourceField] {
 			rejected++
+			if len(rejectedNames) < 10 {
+				rejectedNames = append(rejectedNames, p.SourceField)
+			}
 			continue
 		}
 		if !validRelationship(p.Relationship) {
 			p.Relationship = mapping.Unknown
 			p.TargetField = ""
+		}
+		// A target the convention does not define is the failure this agent is
+		// meant to prevent: the data lands, the column looks plausible, and it
+		// joins with nobody. Observed from a real run: llm.model.name,
+		// llm.usage.prompt_tokens, trace.id.
+		if p.Relationship != mapping.Unknown && p.TargetField != "" && !semconv.Known(p.TargetField) {
+			if len(invalidTargets) < 10 {
+				invalidTargets = append(invalidTargets, p.TargetField)
+			}
+			invalidTarget++
+			p.Rationale = "rejected: " + p.TargetField + " is not a gen_ai attribute in semconv " + semconv.Version
+			p.Relationship = mapping.Unknown
+			p.TargetField = ""
+			p.Confidence = 0
 		}
 		if p.Relationship == mapping.Unknown {
 			p.TargetField = ""
@@ -292,7 +365,15 @@ func proposeMapping(ctx context.Context, tr trace.Tracer, text string, fields []
 	span.SetAttributes(
 		attribute.Int("builder.proposals_accepted", len(out)),
 		attribute.Int("builder.proposals_rejected_unknown_field", rejected),
+		attribute.Int("builder.proposals_returned", len(parsed.Proposals)),
+		attribute.Int("builder.proposals_rejected_invalid_target", invalidTarget),
 	)
+	if len(invalidTargets) > 0 {
+		span.SetAttributes(attribute.StringSlice("builder.invalid_target_names", invalidTargets))
+	}
+	if len(rejectedNames) > 0 {
+		span.SetAttributes(attribute.StringSlice("builder.rejected_field_names", rejectedNames))
+	}
 	return out, nil
 }
 
@@ -363,6 +444,11 @@ func prompt(system string, fields []string, prior []FieldProposal) string {
 	b.WriteString(`
 Return ONLY JSON: {"proposals":[{"source_field","target_field","relationship","confidence","rationale"}]}.
 relationship is one of EXACT, COMPATIBLE, NARROWER, BROADER, LOSSY, CONFLICTING, UNKNOWN.
+confidence MUST be a JSON number between 0 and 1, e.g. 0.82. Do not use words such as "HIGH".
+target_field MUST be an OpenTelemetry gen_ai.* attribute that actually exists in the semantic
+conventions, e.g. gen_ai.usage.input_tokens, gen_ai.request.model, gen_ai.provider.name. Names in
+the llm.* namespace are superseded and are not valid targets. If no gen_ai attribute fits, answer
+UNKNOWN - that is a correct answer, not a failure.
 Rules:
 - Only propose source_field values from the list above. Never invent a field.
 - Never invent a semantic convention attribute you are not confident exists.
@@ -467,6 +553,13 @@ func requiresReview(proposals []FieldProposal) bool {
 
 func conversationIDFor(opts Options) string {
 	return "build-" + opts.System
+}
+
+func head(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }
 
 func tail(s string, n int) string {

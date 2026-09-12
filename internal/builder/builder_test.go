@@ -324,3 +324,89 @@ func spanNames(spans tracetest.SpanStubs) []string {
 	}
 	return out
 }
+
+// Nova returned "confidence": "HIGH" - a string where a number was requested.
+// Before Confidence.UnmarshalJSON existed, that one type mismatch failed the
+// whole document and every field fell through to UNKNOWN.
+func TestQualitativeConfidenceIsAccepted(t *testing.T) {
+	dir := t.TempDir()
+	payload := writePayload(t, dir, basePayload())
+	m := &fakeModel{replies: []Reply{{
+		Model: "amazon.nova-lite-v1:0",
+		Text: "```json\n{\"proposals\":[" +
+			`{"source_field":"model","target_field":"gen_ai.request.model","relationship":"EXACT","confidence":"HIGH"},` +
+			`{"source_field":"usage.inputTokens","target_field":"gen_ai.usage.input_tokens","relationship":"EXACT","confidence":"HIGH"}` +
+			"]}\n```",
+	}}}
+
+	res, err := Run(context.Background(), m, Options{System: "acme", PayloadPath: payload, OutDir: dir, MaxIterations: 1})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, p := range res.Proposals {
+		if p.Relationship == mapping.Unknown {
+			t.Fatalf("field %q fell through to UNKNOWN despite a usable proposal", p.SourceField)
+		}
+	}
+	// A qualitative label must not be able to auto-approve a mapping.
+	if !res.RequiresHumanReview {
+		t.Error(`"HIGH" is not a calibrated confidence and must still require review`)
+	}
+}
+
+func TestConfidenceParsing(t *testing.T) {
+	cases := map[string]Confidence{
+		`0.82`:     0.82,
+		`"0.82"`:   0.82,
+		`"HIGH"`:   confidenceHigh,
+		`"medium"`: confidenceMedium,
+		`"Low"`:    confidenceLow,
+		`"banana"`: 0,
+		`null`:     0,
+	}
+	for in, want := range cases {
+		var c Confidence
+		if err := c.UnmarshalJSON([]byte(in)); err != nil {
+			t.Errorf("UnmarshalJSON(%s) returned error: %v", in, err)
+			continue
+		}
+		if c != want {
+			t.Errorf("UnmarshalJSON(%s) = %v, want %v", in, c, want)
+		}
+	}
+}
+
+// Observed from a real Nova run: the model proposed llm.model.name,
+// llm.usage.prompt_tokens, trace.id and gen_ai.usage.total_tokens at
+// confidence 0.95. All are plausible and none exist in semconv 1.41.0.
+func TestInventedTargetAttributesAreRejected(t *testing.T) {
+	dir := t.TempDir()
+	payload := writePayload(t, dir, basePayload())
+	m := &fakeModel{replies: []Reply{{
+		Model: "m",
+		Text: `{"proposals":[
+			{"source_field":"model","target_field":"llm.model.name","relationship":"EXACT","confidence":0.95},
+			{"source_field":"usage.inputTokens","target_field":"gen_ai.usage.input_tokens","relationship":"EXACT","confidence":0.95}
+		]}`,
+	}}}
+
+	res, err := Run(context.Background(), m, Options{System: "acme", PayloadPath: payload, OutDir: dir, MaxIterations: 1})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, p := range res.Proposals {
+		switch p.SourceField {
+		case "model":
+			if p.Relationship != mapping.Unknown {
+				t.Errorf("llm.model.name is not a semconv attribute and must be rejected, got %q", p.Relationship)
+			}
+			if p.TargetField != "" {
+				t.Errorf("a rejected proposal must not keep its target, got %q", p.TargetField)
+			}
+		case "usage.inputTokens":
+			if p.Relationship != mapping.Exact {
+				t.Errorf("a valid semconv target must survive, got %q", p.Relationship)
+			}
+		}
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -32,6 +33,12 @@ import (
 // uses TLS. Only http:// or a loopback address falls back to plaintext, which is
 // what a local collector expects.
 func Setup(ctx context.Context, service string) (func(context.Context) error, error) {
+	// OTEL_TRACES_EXPORTER=console writes spans to stdout instead of shipping
+	// them. It makes span shape inspectable without a collector or a vendor
+	// account, which is how the agent traces are checked locally.
+	if strings.EqualFold(os.Getenv("OTEL_TRACES_EXPORTER"), "console") {
+		return setupConsole(ctx, service)
+	}
 	exp, err := newExporter(ctx)
 	if err != nil {
 		return nil, err
@@ -117,4 +124,23 @@ func isLoopback(hostPort string) bool {
 	}
 	host = strings.Trim(host, "[]")
 	return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == ""
+}
+
+func setupConsole(ctx context.Context, service string) (func(context.Context) error, error) {
+	exp, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	if err != nil {
+		return nil, err
+	}
+	res, err := resource.New(ctx, resource.WithAttributes(
+		semconv.ServiceName(service),
+		semconv.ServiceVersion("1.0.0"),
+	))
+	if err != nil {
+		return nil, err
+	}
+	// Synchronous export: a short-lived CLI must not lose spans to batching.
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp), sdktrace.WithResource(res))
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	return tp.Shutdown, nil
 }
