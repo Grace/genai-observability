@@ -69,3 +69,34 @@ func TestFrameworkAdaptersNormalizeEquivalentInvocation(t *testing.T) {
 		}
 	}
 }
+
+// A source reporting total_tokens: 0 alongside non-zero input and output is
+// disagreeing with itself. The adapters used to overwrite that zero with
+// input+output, so the comparison here saw 14 == 14 and the disagreement was
+// gone before this check ran. The evidence is now preserved end to end.
+func TestReportedZeroTotalSurfacesAsUsageMismatch(t *testing.T) {
+	req := Request{
+		Source:  "otel",
+		Payload: []byte(`{"attributes":{"gen_ai.operation.name":"chat","gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":4,"gen_ai.usage.total_tokens":0}}`),
+	}
+	r, err := Run(req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var found bool
+	for _, w := range r.Warnings {
+		if w.Code == "usage_mismatch" {
+			found = true
+		}
+	}
+	if !found {
+		var got []string
+		for _, w := range r.Warnings {
+			got = append(got, w.Code)
+		}
+		t.Fatalf("expected usage_mismatch for a reported zero total, got %v", got)
+	}
+	if r.Record.TotalTokens != 0 {
+		t.Errorf("total = %d, want the reported 0 preserved", r.Record.TotalTokens)
+	}
+}

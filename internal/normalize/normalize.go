@@ -35,7 +35,11 @@ func validate(r *canonical.NormalizationReport) {
 	if r.Record.InputTokens < 0 || r.Record.OutputTokens < 0 || r.Record.TotalTokens < 0 {
 		r.Errors = append(r.Errors, canonical.Issue{Code: "invalid_usage", Field: "usage", Message: "token counts cannot be negative"})
 	}
-	if r.Record.TotalTokens > 0 && r.Record.InputTokens+r.Record.OutputTokens > 0 && r.Record.TotalTokens != r.Record.InputTokens+r.Record.OutputTokens {
+	// Not guarded on TotalTokens > 0: a source reporting a total of zero next to
+	// non-zero input and output is disagreeing with itself, and that is the case
+	// this check exists for. The adapters synthesize input+output only when the
+	// total is genuinely absent, so a zero here was reported, not assumed.
+	if r.Record.InputTokens+r.Record.OutputTokens > 0 && r.Record.TotalTokens != r.Record.InputTokens+r.Record.OutputTokens {
 		r.Warnings = append(r.Warnings, canonical.Issue{Code: "usage_mismatch", Field: "total_tokens", Message: "reported total tokens differ from input + output; preserved without rewriting"})
 	}
 }

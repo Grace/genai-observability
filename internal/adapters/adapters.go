@@ -3,6 +3,8 @@ package adapters
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -61,13 +63,16 @@ func (a mapAdapter) Normalize(raw json.RawMessage) (canonical.NormalizationRepor
 func normalizeOTel(m map[string]any) canonical.NormalizationReport {
 	r := base(m)
 	a := attributes(m)
-	r.Record.Operation = firstString(a, "gen_ai.operation.name", "gen_ai.operation.type", "span.name")
-	r.Record.Provider = firstString(a, "gen_ai.provider.name", "gen_ai.system")
-	r.Record.Model = firstString(a, "gen_ai.request.model", "gen_ai.response.model")
-	r.Record.InputTokens = firstInt(a, "gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens")
-	r.Record.OutputTokens = firstInt(a, "gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens")
-	r.Record.TotalTokens = firstInt(a, "gen_ai.usage.total_tokens")
-	if r.Record.TotalTokens == 0 {
+	r.Record.Operation = pick(&r.Warnings, a, "gen_ai.operation.name", "gen_ai.operation.type", "span.name")
+	r.Record.Provider = pick(&r.Warnings, a, "gen_ai.provider.name", "gen_ai.system")
+	r.Record.Model = pick(&r.Warnings, a, "gen_ai.request.model", "gen_ai.response.model")
+	r.Record.InputTokens = pickInt(&r.Warnings, a, "gen_ai.usage.input_tokens", "gen_ai.usage.prompt_tokens")
+	r.Record.OutputTokens = pickInt(&r.Warnings, a, "gen_ai.usage.output_tokens", "gen_ai.usage.completion_tokens")
+	if total, ok := pickNum(&r.Warnings, a, "gen_ai.usage.total_tokens"); ok {
+		// A reported zero is preserved: overwriting it with the synthesized sum
+		// erased the disagreement before normalize could flag usage_mismatch.
+		r.Record.TotalTokens = total
+	} else {
 		r.Record.TotalTokens = r.Record.InputTokens + r.Record.OutputTokens
 	}
 	copyKnownAttrs(&r.Record, a)
@@ -82,13 +87,16 @@ func normalizeOpenLLMetry(m map[string]any) canonical.NormalizationReport {
 	a := attributes(m)
 	// OpenLLMetry has historically emitted a mixture of OpenTelemetry GenAI and
 	// vendor-prefixed attributes. Accept known aliases but record the alias used.
-	r.Record.Operation = firstString(a, "gen_ai.operation.name", "llm.request.type", "traceloop.span.kind")
-	r.Record.Provider = firstString(a, "gen_ai.provider.name", "llm.vendor", "gen_ai.system")
-	r.Record.Model = firstString(a, "gen_ai.request.model", "llm.request.model")
-	r.Record.InputTokens = firstInt(a, "gen_ai.usage.input_tokens", "llm.usage.prompt_tokens")
-	r.Record.OutputTokens = firstInt(a, "gen_ai.usage.output_tokens", "llm.usage.completion_tokens")
-	r.Record.TotalTokens = firstInt(a, "gen_ai.usage.total_tokens", "llm.usage.total_tokens")
-	if r.Record.TotalTokens == 0 {
+	r.Record.Operation = pick(&r.Warnings, a, "gen_ai.operation.name", "llm.request.type", "traceloop.span.kind")
+	r.Record.Provider = pick(&r.Warnings, a, "gen_ai.provider.name", "llm.vendor", "gen_ai.system")
+	r.Record.Model = pick(&r.Warnings, a, "gen_ai.request.model", "llm.request.model")
+	r.Record.InputTokens = pickInt(&r.Warnings, a, "gen_ai.usage.input_tokens", "llm.usage.prompt_tokens")
+	r.Record.OutputTokens = pickInt(&r.Warnings, a, "gen_ai.usage.output_tokens", "llm.usage.completion_tokens")
+	if total, ok := pickNum(&r.Warnings, a, "gen_ai.usage.total_tokens", "llm.usage.total_tokens"); ok {
+		// A reported zero is preserved: overwriting it with the synthesized sum
+		// erased the disagreement before normalize could flag usage_mismatch.
+		r.Record.TotalTokens = total
+	} else {
 		r.Record.TotalTokens = r.Record.InputTokens + r.Record.OutputTokens
 	}
 	copyKnownAttrs(&r.Record, a)
@@ -98,17 +106,29 @@ func normalizeOpenLLMetry(m map[string]any) canonical.NormalizationReport {
 
 func normalizeBraintrust(m map[string]any) canonical.NormalizationReport {
 	r := base(m)
-	r.Record.Operation = firstString(m, "span_attributes.name", "name", "type")
-	r.Record.Model = firstString(m, "metadata.model", "model")
-	r.Record.Provider = firstString(m, "metadata.provider", "provider")
-	r.Record.InputTokens = firstInt(m, "metrics.prompt_tokens", "usage.prompt_tokens", "input_tokens")
-	r.Record.OutputTokens = firstInt(m, "metrics.completion_tokens", "usage.completion_tokens", "output_tokens")
-	r.Record.TotalTokens = firstInt(m, "metrics.tokens", "usage.total_tokens")
-	if r.Record.TotalTokens == 0 {
+	r.Record.Operation = pick(&r.Warnings, m, "span_attributes.name", "name", "type")
+	r.Record.Model = pick(&r.Warnings, m, "metadata.model", "model")
+	r.Record.Provider = pick(&r.Warnings, m, "metadata.provider", "provider")
+	r.Record.InputTokens = pickInt(&r.Warnings, m, "metrics.prompt_tokens", "usage.prompt_tokens", "input_tokens")
+	r.Record.OutputTokens = pickInt(&r.Warnings, m, "metrics.completion_tokens", "usage.completion_tokens", "output_tokens")
+	if total, ok := pickNum(&r.Warnings, m, "metrics.tokens", "usage.total_tokens"); ok {
+		// A reported zero is preserved: overwriting it with the synthesized sum
+		// erased the disagreement before normalize could flag usage_mismatch.
+		r.Record.TotalTokens = total
+	} else {
 		r.Record.TotalTokens = r.Record.InputTokens + r.Record.OutputTokens
 	}
-	for k, v := range mapAt(m, "scores") {
-		if f, ok := number(v); ok {
+	// Sorted, not map order: evaluations are emitted with index-derived keys
+	// downstream, so a nondeterministic order makes the same payload produce
+	// different column meanings between runs.
+	scores := mapAt(m, "scores")
+	names := make([]string, 0, len(scores))
+	for k := range scores {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		if f, ok := number(scores[k]); ok {
 			r.Record.Evaluations = append(r.Record.Evaluations, canonical.Evaluation{Name: k, Concept: k, Kind: "scalar", Value: f, Evaluator: "braintrust"})
 		}
 	}
@@ -120,16 +140,19 @@ func normalizeBraintrust(m map[string]any) canonical.NormalizationReport {
 
 func normalizeBedrock(m map[string]any) canonical.NormalizationReport {
 	r := base(m)
-	r.Record.Operation = firstString(m, "operation", "operation_name")
+	r.Record.Operation = pick(&r.Warnings, m, "operation", "operation_name")
 	if r.Record.Operation == "" {
 		r.Record.Operation = "chat"
 	}
 	r.Record.Provider = "aws.bedrock"
-	r.Record.Model = firstString(m, "modelId", "model_id", "model")
-	r.Record.InputTokens = firstInt(m, "usage.inputTokens", "usage.input_tokens")
-	r.Record.OutputTokens = firstInt(m, "usage.outputTokens", "usage.output_tokens")
-	r.Record.TotalTokens = firstInt(m, "usage.totalTokens", "usage.total_tokens")
-	if r.Record.TotalTokens == 0 {
+	r.Record.Model = pick(&r.Warnings, m, "modelId", "model_id", "model")
+	r.Record.InputTokens = pickInt(&r.Warnings, m, "usage.inputTokens", "usage.input_tokens")
+	r.Record.OutputTokens = pickInt(&r.Warnings, m, "usage.outputTokens", "usage.output_tokens")
+	if total, ok := pickNum(&r.Warnings, m, "usage.totalTokens", "usage.total_tokens"); ok {
+		// A reported zero is preserved: overwriting it with the synthesized sum
+		// erased the disagreement before normalize could flag usage_mismatch.
+		r.Record.TotalTokens = total
+	} else {
 		r.Record.TotalTokens = r.Record.InputTokens + r.Record.OutputTokens
 	}
 	if lat, ok := number(path(m, "metrics.latencyMs")); ok {
@@ -143,7 +166,7 @@ func normalizePydanticAI(m map[string]any) canonical.NormalizationReport {
 	// explicit so framework-specific attributes can evolve independently.
 	r := normalizeOTel(m)
 	a := attributes(m)
-	if agent := firstString(a, "pydantic_ai.agent_name", "gen_ai.agent.name"); agent != "" {
+	if agent := pick(&r.Warnings, a, "pydantic_ai.agent_name", "gen_ai.agent.name"); agent != "" {
 		if r.Record.Attributes == nil {
 			r.Record.Attributes = map[string]string{}
 		}
@@ -154,16 +177,19 @@ func normalizePydanticAI(m map[string]any) canonical.NormalizationReport {
 
 func normalizeEino(m map[string]any) canonical.NormalizationReport {
 	r := base(m)
-	r.Record.Operation = mapEinoOperation(firstString(m, "component", "component_type", "span.component"))
-	if op := firstString(m, "operation", "operation_name"); op != "" {
+	r.Record.Operation = mapEinoOperation(pick(&r.Warnings, m, "component", "component_type", "span.component"))
+	if op := pick(&r.Warnings, m, "operation", "operation_name"); op != "" {
 		r.Record.Operation = op
 	}
-	r.Record.Provider = firstString(m, "provider", "vendor")
-	r.Record.Model = firstString(m, "model", "model_name")
-	r.Record.InputTokens = firstInt(m, "input_tokens", "usage.input_tokens", "usage.prompt_tokens")
-	r.Record.OutputTokens = firstInt(m, "output_tokens", "usage.output_tokens", "usage.completion_tokens")
-	r.Record.TotalTokens = firstInt(m, "total_tokens", "usage.total_tokens")
-	if r.Record.TotalTokens == 0 {
+	r.Record.Provider = pick(&r.Warnings, m, "provider", "vendor")
+	r.Record.Model = pick(&r.Warnings, m, "model", "model_name")
+	r.Record.InputTokens = pickInt(&r.Warnings, m, "input_tokens", "usage.input_tokens", "usage.prompt_tokens")
+	r.Record.OutputTokens = pickInt(&r.Warnings, m, "output_tokens", "usage.output_tokens", "usage.completion_tokens")
+	if total, ok := pickNum(&r.Warnings, m, "total_tokens", "usage.total_tokens"); ok {
+		// A reported zero is preserved: overwriting it with the synthesized sum
+		// erased the disagreement before normalize could flag usage_mismatch.
+		r.Record.TotalTokens = total
+	} else {
 		r.Record.TotalTokens = r.Record.InputTokens + r.Record.OutputTokens
 	}
 	if lat, ok := number(path(m, "latency_ms")); ok {
@@ -187,13 +213,16 @@ func mapEinoOperation(component string) string {
 
 func normalizeGenkit(m map[string]any) canonical.NormalizationReport {
 	r := base(m)
-	r.Record.Operation = mapGenkitOperation(firstString(m, "span_type", "type", "operation"))
-	provider, modelName := splitProviderModel(firstString(m, "model", "model_name"))
+	r.Record.Operation = mapGenkitOperation(pick(&r.Warnings, m, "span_type", "type", "operation"))
+	provider, modelName := splitProviderModel(pick(&r.Warnings, m, "model", "model_name"))
 	r.Record.Provider, r.Record.Model = provider, modelName
-	r.Record.InputTokens = firstInt(m, "usage.inputTokens", "usage.input_tokens", "usage.promptTokens")
-	r.Record.OutputTokens = firstInt(m, "usage.outputTokens", "usage.output_tokens", "usage.completionTokens")
-	r.Record.TotalTokens = firstInt(m, "usage.totalTokens", "usage.total_tokens")
-	if r.Record.TotalTokens == 0 {
+	r.Record.InputTokens = pickInt(&r.Warnings, m, "usage.inputTokens", "usage.input_tokens", "usage.promptTokens")
+	r.Record.OutputTokens = pickInt(&r.Warnings, m, "usage.outputTokens", "usage.output_tokens", "usage.completionTokens")
+	if total, ok := pickNum(&r.Warnings, m, "usage.totalTokens", "usage.total_tokens"); ok {
+		// A reported zero is preserved: overwriting it with the synthesized sum
+		// erased the disagreement before normalize could flag usage_mismatch.
+		r.Record.TotalTokens = total
+	} else {
 		r.Record.TotalTokens = r.Record.InputTokens + r.Record.OutputTokens
 	}
 	return r
@@ -222,9 +251,9 @@ func splitProviderModel(v string) (string, string) {
 
 func base(m map[string]any) canonical.NormalizationReport {
 	r := canonical.NormalizationReport{Record: canonical.TelemetryRecord{SchemaVersion: "v1", Extensions: map[string]any{}}}
-	r.Record.TraceID = firstString(m, "trace_id", "traceId", "span.trace_id")
-	r.Record.SpanID = firstString(m, "span_id", "spanId", "span.span_id")
-	r.Record.ParentSpanID = firstString(m, "parent_span_id", "parentSpanId")
+	r.Record.TraceID = pick(&r.Warnings, m, "trace_id", "traceId", "span.trace_id")
+	r.Record.SpanID = pick(&r.Warnings, m, "span_id", "spanId", "span.span_id")
+	r.Record.ParentSpanID = pick(&r.Warnings, m, "parent_span_id", "parentSpanId")
 	for k, v := range m {
 		r.Record.Extensions[k] = v
 	}
@@ -268,23 +297,83 @@ func path(m map[string]any, dotted string) any {
 	}
 	return cur
 }
-func firstString(m map[string]any, keys ...string) string {
+
+// pick resolves the first alias that carries a value, and reports when more than
+// one alias is present with a different value.
+//
+// Returning the first match silently was the original behaviour. Two aliases
+// disagreeing about the same concept is the ambiguity this project exists to
+// surface, and deciding it by argument order hides exactly what should be
+// reported. Precedence is still first-listed-wins - that part was never the
+// problem - but the conflict is now recorded.
+func pick(iss *[]canonical.Issue, m map[string]any, keys ...string) string {
+	var chosen, chosenKey string
+	var conflicts []string
 	for _, k := range keys {
-		if v := path(m, k); v != nil {
-			if s := strings.TrimSpace(fmt.Sprint(v)); s != "" && s != "<nil>" {
-				return s
-			}
+		v := path(m, k)
+		if v == nil {
+			continue
+		}
+		s := strings.TrimSpace(fmt.Sprint(v))
+		if s == "" || s == "<nil>" {
+			continue
+		}
+		if chosen == "" {
+			chosen, chosenKey = s, k
+			continue
+		}
+		if s != chosen {
+			conflicts = append(conflicts, k+"="+s)
 		}
 	}
-	return ""
+	if len(conflicts) > 0 && iss != nil {
+		*iss = append(*iss, issue("alias_conflict", chosenKey,
+			"aliases disagree; kept "+chosenKey+"="+chosen+", also present: "+strings.Join(conflicts, ", ")))
+	}
+	return chosen
 }
-func firstInt(m map[string]any, keys ...string) int64 {
+
+// pickNum is pick for numeric fields. It additionally reports a non-integer
+// token count instead of truncating it away: a fractional count means something
+// upstream is wrong, and int64(10.9) == 10 discards that signal.
+func pickNum(iss *[]canonical.Issue, m map[string]any, keys ...string) (int64, bool) {
+	var chosen float64
+	var chosenKey string
+	var found bool
+	var conflicts []string
 	for _, k := range keys {
-		if f, ok := number(path(m, k)); ok {
-			return int64(f)
+		f, ok := number(path(m, k))
+		if !ok {
+			continue
+		}
+		if !found {
+			chosen, chosenKey, found = f, k, true
+			continue
+		}
+		if f != chosen {
+			conflicts = append(conflicts, fmt.Sprintf("%s=%v", k, f))
 		}
 	}
-	return 0
+	if !found {
+		return 0, false
+	}
+	if iss != nil {
+		if len(conflicts) > 0 {
+			*iss = append(*iss, issue("alias_conflict", chosenKey,
+				fmt.Sprintf("aliases disagree; kept %s=%v, also present: %s", chosenKey, chosen, strings.Join(conflicts, ", "))))
+		}
+		if chosen != math.Trunc(chosen) {
+			*iss = append(*iss, issue("non_integer_token_count", chosenKey,
+				fmt.Sprintf("%s reported %v, which is not a whole number of tokens; truncated to %d", chosenKey, chosen, int64(chosen))))
+		}
+	}
+	return int64(chosen), true
+}
+
+// pickInt is pickNum for fields where absence and zero are equivalent.
+func pickInt(iss *[]canonical.Issue, m map[string]any, keys ...string) int64 {
+	v, _ := pickNum(iss, m, keys...)
+	return v
 }
 func number(v any) (float64, bool) {
 	switch x := v.(type) {
