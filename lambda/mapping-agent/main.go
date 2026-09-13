@@ -24,10 +24,10 @@ var object = regexp.MustCompile(`(?s)\{.*\}`)
 
 type agentJSON struct {
 	Relationship mapping.Relationship `json:"relationship"`
-	Confidence   float64              `json:"confidence"`
+	Confidence   mapping.Confidence   `json:"confidence"`
 	Rationale    string               `json:"rationale"`
 	Evidence     []mapping.Evidence   `json:"evidence"`
-	Objections   []string             `json:"objections"`
+	Objections   mapping.Objections   `json:"objections"`
 }
 
 func init() {
@@ -75,6 +75,14 @@ func handler(ctx context.Context, input json.RawMessage) (mapping.AgentAssessmen
 	}
 	var parsed agentJSON
 	if err := json.Unmarshal([]byte(candidate), &parsed); err != nil {
+		// Without the raw text this failure is undiagnosable: the assessment
+		// becomes UNKNOWN, the policy correctly demands human review, and the
+		// agent looks cautious rather than broken.
+		slog.Error("agent response did not parse",
+			"role", role, "err", err,
+			"raw_len", len(text), "candidate_len", len(candidate),
+			"sample", head(candidate, 400))
+		span.SetAttributes(attribute.String("mapping.response_sample", head(candidate, 400)))
 		return mapping.AgentAssessment{Agent: role, Relationship: mapping.Unknown, Confidence: 0, Rationale: "agent returned invalid structured output", Objections: []string{"unparseable model response"}, Model: modelID, PromptVersion: "mapping-agent-v1"}, nil
 	}
 	if !validRelationship(parsed.Relationship) {
@@ -88,8 +96,8 @@ func handler(ctx context.Context, input json.RawMessage) (mapping.AgentAssessmen
 	if parsed.Confidence > 1 {
 		parsed.Confidence = 1
 	}
-	span.SetAttributes(attribute.String("mapping.relationship", string(parsed.Relationship)), attribute.Float64("mapping.confidence", parsed.Confidence), attribute.Int("mapping.objection_count", len(parsed.Objections)))
-	return mapping.AgentAssessment{Agent: role, Relationship: parsed.Relationship, Confidence: parsed.Confidence, Rationale: parsed.Rationale, Evidence: parsed.Evidence, Objections: parsed.Objections, Model: modelID, PromptVersion: "mapping-agent-v1"}, nil
+	span.SetAttributes(attribute.String("mapping.relationship", string(parsed.Relationship)), attribute.Float64("mapping.confidence", parsed.Confidence.Float()), attribute.Int("mapping.objection_count", len(parsed.Objections)))
+	return mapping.AgentAssessment{Agent: role, Relationship: parsed.Relationship, Confidence: parsed.Confidence.Float(), Rationale: parsed.Rationale, Evidence: parsed.Evidence, Objections: parsed.Objections, Model: modelID, PromptVersion: "mapping-agent-v1"}, nil
 }
 
 func traceContextFromInput(input json.RawMessage) map[string]string {
@@ -128,3 +136,10 @@ func validRelationship(r mapping.Relationship) bool {
 	return strings.Contains("|EXACT|COMPATIBLE|NARROWER|BROADER|LOSSY|CONFLICTING|UNKNOWN|", "|"+string(r)+"|")
 }
 func main() { lambda.Start(handler) }
+
+func head(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}

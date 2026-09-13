@@ -74,3 +74,44 @@ variable "allowed_cidrs" {
     error_message = "Set allowed_cidrs to at least one specific CIDR and not 0.0.0.0/0. Example: allowed_cidrs = [\"203.0.113.4/32\"]."
   }
 }
+
+variable "web_domain" {
+  type        = string
+  description = "Public hostname for the Normalization Inspector, e.g. genai-observability.wirewitch.ai. Empty disables all public hosting."
+  default     = ""
+}
+
+variable "api_domain" {
+  type        = string
+  description = "Hostname for the authenticated API. /ask is served here behind a Cognito login. Required when web_domain is set."
+  default     = ""
+}
+
+variable "cognito_domain_prefix" {
+  type        = string
+  description = "Globally unique prefix for the Cognito hosted login domain."
+  default     = ""
+}
+
+variable "waf_rate_limit" {
+  type        = number
+  description = "Requests per five minutes from a single IP before WAF blocks it. AWS enforces a floor of 100."
+  default     = 500
+
+  validation {
+    condition     = var.waf_rate_limit >= 100
+    error_message = "WAF rate-based rules require a limit of at least 100."
+  }
+}
+
+variable "budget_alert_email" {
+  type        = string
+  description = "Address to notify on budget thresholds. Empty disables the budget."
+  default     = ""
+}
+
+variable "budget_limit_usd" {
+  type        = string
+  description = "Monthly budget in USD. Alerts at 80 percent forecast and 100 percent actual."
+  default     = "100"
+}

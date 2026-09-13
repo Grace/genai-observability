@@ -21,12 +21,26 @@ mapping_model_id = "REPLACE_WITH_BEDROCK_MODEL_OR_INFERENCE_PROFILE"
 
 # Optional: provide rates you have verified for the exact model IDs and region.
 # Rates are USD per 1M tokens. Unknown models intentionally produce no cost value.
-# model_pricing_json = jsonencode({
-#   version  = "2026-09-verified"
-#   currency = "USD"
-#   unit     = "per_1m_tokens"
-#   models = {
-#     "your.candidate.model" = { input = 0.00, output = 0.00 }
-#     "your.replay.model"    = { input = 0.00, output = 0.00 }
+# tfvars cannot call functions, so this is a JSON string, not jsonencode():
+# model_pricing_json = <<-JSON
+#   {
+#     "version": "2026-09-verified",
+#     "currency": "USD",
+#     "unit": "per_1m_tokens",
+#     "models": {
+#       "your.model.id": { "input": 0.00, "output": 0.00 }
+#     }
 #   }
-# })
+# JSON
+
+# Optional public hosting for the Normalization Inspector. Leave web_domain
+# empty to skip all of it. DNS is managed wherever your domain lives; Terraform
+# outputs the records to create.
+# web_domain            = "inspector.example.com"
+# api_domain            = "api.example.com"          # /ask, behind a Cognito login
+# cognito_domain_prefix = "example-<account-id>"      # must be globally unique
+# waf_rate_limit        = 500                         # requests per 5 min per IP
+
+# Budget alerts: 80% forecast and 100% actual. Empty email disables the budget.
+# budget_alert_email = "you@example.com"
+# budget_limit_usd   = "100"
