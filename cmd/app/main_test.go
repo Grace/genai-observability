@@ -1,8 +1,11 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/grace/genai-observability/internal/canonical"
@@ -111,5 +114,40 @@ func TestNoInventedGenAIAttributesAreEmitted(t *testing.T) {
 			continue
 		}
 		t.Errorf("main.go emits %q, which is neither defined in semantic conventions %s nor declared as an extension in internal/semconv", name, semconv.Version)
+	}
+}
+
+// Completing the Cognito login lands the browser on /ask as a GET. The handler
+// decoded the empty body, failed, and answered with the bare word "EOF" - which
+// reads like a broken service at the exact moment authentication has just
+// succeeded.
+func TestAskRejectsNonPostWithGuidance(t *testing.T) {
+	a := &app{modelID: "test-model"}
+	rec := httptest.NewRecorder()
+	a.ask(rec, httptest.NewRequest(http.MethodGet, "/ask", nil))
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", rec.Code)
+	}
+	if got := rec.Header().Get("Allow"); got != "POST" {
+		t.Errorf("Allow header = %q, want POST", got)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "EOF") {
+		t.Errorf("response still reports EOF: %q", body)
+	}
+	if !strings.Contains(body, "authenticated") {
+		t.Errorf("response should tell the caller they are past auth, got %q", body)
+	}
+}
+
+func TestAskRequiresAQuestion(t *testing.T) {
+	a := &app{modelID: "test-model"}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/ask", strings.NewReader(`{"evidence":["e"]}`))
+	a.ask(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for a missing question", rec.Code)
 	}
 }

@@ -136,9 +136,23 @@ func (a *app) normalize(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) ask(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	// Reaching this handler from a browser is the normal outcome of completing
+	// the Cognito login, since the redirect lands here as a GET. Without this
+	// check the empty body failed JSON decoding and the response was the single
+	// word "EOF", which says nothing about what to do next.
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "POST required. You are authenticated; send a JSON body: "+
+			`{"question":"...","evidence":["..."]}`, http.StatusMethodNotAllowed)
+		return
+	}
 	var body askRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), 400)
+		http.Error(w, "request body must be JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(body.Question) == "" {
+		http.Error(w, `"question" is required`, http.StatusBadRequest)
 		return
 	}
 	ctx, span := otel.Tracer("genai-observability/app").Start(ctx, "gen_ai.request")
