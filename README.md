@@ -208,6 +208,25 @@ Adapters translate source-specific shapes into the same telemetry concepts; they
 
 This keeps causal observability explicit across boundaries instead of relying only on a string trace reference. `internal/telemetry/context_test.go` exercises context round-tripping.
 
+Verified in the deployed system. A single request to `/ask` produced one trace of eight spans across
+six services, every evaluation span carrying the producing request's span as its parent rather than
+correlating on a string attribute:
+
+```text
+http.server                    genai-observability-app          (root)
+└── gen_ai.request             genai-observability-app
+    └── [EventBridge -> Step Functions]
+        ├── evaluation.schema      genai-observability-schema-eval
+        ├── evaluation.policy      genai-observability-policy-eval
+        ├── evaluation.oracle x2   genai-observability-oracle-eval
+        ├── evaluation.consensus   genai-observability-consensus
+        └── evaluation.persist     genai-observability-normalizer
+```
+
+Crossing that boundary is the part that usually breaks. An evaluation that cannot be traced back to
+the request that caused it is a number without a provenance, and a trace that stops at the queue
+cannot answer why one customer's requests are slow.
+
 ## Evaluation harness
 
 The Step Functions evaluation workflow runs four branches:
