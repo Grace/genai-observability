@@ -100,3 +100,32 @@ func TestReportedZeroTotalSurfacesAsUsageMismatch(t *testing.T) {
 		t.Errorf("total = %d, want the reported 0 preserved", r.Record.TotalTokens)
 	}
 }
+
+// omitempty on the token counts erased a reported zero from the response: it
+// raised usage_mismatch internally and then serialized identically to a payload
+// that reported no tokens at all.
+func TestReportedZeroTotalSurvivesSerialization(t *testing.T) {
+	req := Request{
+		Source:  "otel",
+		Payload: []byte(`{"attributes":{"gen_ai.operation.name":"chat","gen_ai.usage.input_tokens":10,"gen_ai.usage.output_tokens":4,"gen_ai.usage.total_tokens":0}}`),
+	}
+	r, err := Run(req)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	body, err := json.Marshal(r.Record)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	v, present := out["total_tokens"]
+	if !present {
+		t.Fatal("total_tokens absent from the response; a reported zero must be visible to consumers")
+	}
+	if v.(float64) != 0 {
+		t.Errorf("total_tokens = %v, want 0", v)
+	}
+}

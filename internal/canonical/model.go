@@ -7,17 +7,22 @@ import "time"
 // normalized surface small and carries source fields that cannot be mapped
 // losslessly in Extensions rather than silently discarding them.
 type TelemetryRecord struct {
-	SchemaVersion string            `json:"schema_version"`
-	Source        Source            `json:"source"`
-	TraceID       string            `json:"trace_id,omitempty"`
-	SpanID        string            `json:"span_id,omitempty"`
-	ParentSpanID  string            `json:"parent_span_id,omitempty"`
-	Operation     string            `json:"operation"`
-	Provider      string            `json:"provider,omitempty"`
-	Model         string            `json:"model,omitempty"`
-	InputTokens   int64             `json:"input_tokens,omitempty"`
-	OutputTokens  int64             `json:"output_tokens,omitempty"`
-	TotalTokens   int64             `json:"total_tokens,omitempty"`
+	SchemaVersion string `json:"schema_version"`
+	Source        Source `json:"source"`
+	TraceID       string `json:"trace_id,omitempty"`
+	SpanID        string `json:"span_id,omitempty"`
+	ParentSpanID  string `json:"parent_span_id,omitempty"`
+	Operation     string `json:"operation"`
+	Provider      string `json:"provider,omitempty"`
+	Model         string `json:"model,omitempty"`
+	// No omitempty on the token counts. A source reporting zero tokens is making
+	// a claim, and omitempty erases it into the same wire shape as a source that
+	// reported nothing - the exact conflation this model exists to avoid. It
+	// defeated the fix upstream too: a preserved total_tokens: 0 raised
+	// usage_mismatch internally and then vanished from the response.
+	InputTokens   int64             `json:"input_tokens"`
+	OutputTokens  int64             `json:"output_tokens"`
+	TotalTokens   int64             `json:"total_tokens"`
 	CostUSD       *float64          `json:"cost_usd,omitempty"`
 	LatencyMS     *float64          `json:"latency_ms,omitempty"`
 	Status        string            `json:"status,omitempty"`
