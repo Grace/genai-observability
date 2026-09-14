@@ -56,11 +56,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash -n scripts/*.sh
+      # graphviz renders the architecture diagram for the drift check. shellcheck
+      # comes from the distribution rather than a third-party action: the action
+      # was pinned to @master and fetched a tarball at run time, and when that
+      # download broke it failed CI with a tar error - a lot of moving parts for
+      # a linter apt already ships.
+      - run: sudo apt-get update && sudo apt-get install -y graphviz shellcheck
       # A diagram that drifts from its source is how the architecture starts
       # describing a system that does not exist.
-      - run: sudo apt-get update && sudo apt-get install -y graphviz
       - run: ./scripts/check-diagram.sh
-      - uses: ludeeus/action-shellcheck@master
-        with:
-          scandir: ./scripts
+      - run: shellcheck scripts/*.sh
       - run: grep -RInE '(^|[|;&[:space:]])python([[:space:]]|$)' scripts && exit 1 || true
