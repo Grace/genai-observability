@@ -4,6 +4,39 @@ A Go reference system for normalizing heterogeneous GenAI telemetry into an Open
 
 The project is intentionally built around ordinary infrastructure terminology: adapters, telemetry model, normalization, semantic conventions, evaluation, replay, trace propagation, pricing, and review policy.
 
+## Live
+
+**https://genai-observability.wirewitch.ai** — the Normalization Inspector, running against this
+repository's deployed AWS stack. Paste a framework payload, see the canonical record and every
+warning the normalizer raised.
+
+Try this one. Two aliases disagree about the input token count, and the source reports a total that
+contradicts its own components:
+
+```json
+{"source":"otel","version":"demo","payload":{"attributes":{
+  "gen_ai.operation.name":"chat",
+  "gen_ai.usage.input_tokens":10,
+  "gen_ai.usage.prompt_tokens":9999,
+  "gen_ai.usage.output_tokens":4,
+  "gen_ai.usage.total_tokens":0
+}}}
+```
+
+It returns `alias_conflict` and `usage_mismatch`, keeps the first alias by documented precedence,
+and preserves the reported zero rather than quietly replacing it with the sum. Reporting that
+disagreement instead of resolving it silently is the point of the project.
+
+No sign-in is needed: `/normalize` invokes no model and costs nothing per request. `/ask`, which does
+call a model, lives on a separate hostname behind a Cognito login, because an unauthenticated
+endpoint that spends tokens is a way to spend someone else's money.
+
+Nothing to install:
+
+```bash
+go run ./cmd/normalize -file examples/normalization/braintrust.json
+```
+
 ## What it demonstrates
 
 1. Framework/provider telemetry adapters for OpenTelemetry GenAI, OpenLLMetry/Traceloop, Braintrust, Bedrock, Pydantic AI, Eino, and Genkit.
