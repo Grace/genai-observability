@@ -22,28 +22,6 @@ data "aws_ec2_managed_prefix_list" "cloudfront" {
   name  = "com.amazonaws.global.cloudfront.origin-facing"
 }
 
-resource "aws_security_group_rule" "alb_from_cloudfront" {
-  count             = local.web_enabled
-  type              = "ingress"
-  security_group_id = aws_security_group.alb.id
-  from_port         = 80
-  to_port           = 80
-  protocol          = "tcp"
-  prefix_list_ids   = [data.aws_ec2_managed_prefix_list.cloudfront[0].id]
-  description       = "CloudFront origin-facing ranges, for /normalize"
-}
-
-resource "aws_security_group_rule" "alb_https_from_allowed" {
-  count             = local.web_enabled
-  type              = "ingress"
-  security_group_id = aws_security_group.alb.id
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  description       = "HTTPS for the Cognito-authenticated /ask; auth happens at the listener"
-}
-
 # ---------------------------------------------------------------------------
 # 2. Rate limiting
 # ---------------------------------------------------------------------------

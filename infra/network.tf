@@ -47,13 +47,44 @@ resource "aws_security_group" "alb" {
   name_prefix = "${var.project}-alb-"
   vpc_id      = aws_vpc.main.id
 
-  # The listener fronts an unauthenticated endpoint that spends Bedrock tokens per
-  # request, so ingress is restricted rather than open to the internet.
+  # All ingress is declared here, inline. Terraform treats inline ingress blocks
+  # as the complete set for a security group, so adding rules via separate
+  # aws_security_group_rule resources silently deletes them on the next apply -
+  # which is exactly what happened, taking CloudFront's access with it.
+
+  # Operator access to the plain HTTP listener.
   ingress {
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = var.allowed_cidrs
+    description = "operator"
+  }
+
+  # CloudFront reaches the origin over HTTP. The listener refuses /ask on this
+  # port, so only endpoints that spend nothing are served here.
+  dynamic "ingress" {
+    for_each = var.web_domain != "" ? [1] : []
+    content {
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront[0].id]
+      description     = "CloudFront origin-facing ranges"
+    }
+  }
+
+  # The Cognito-authenticated listener. Open by address because authentication
+  # happens at the listener, before anything reaches the application.
+  dynamic "ingress" {
+    for_each = var.web_domain != "" ? [1] : []
+    content {
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+      description = "HTTPS for Cognito-authenticated /ask"
+    }
   }
 
   egress {

@@ -149,20 +149,26 @@ resource "aws_cloudfront_distribution" "web" {
     origin_request_policy_id = "b689b0a8-53d0-40ab-baf2-68738e2966ac"
   }
 
-  # A single-page app serves its own routes; S3 returns 403 for unknown keys.
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
+  # /ask is not served here, but it must say so. Without this behaviour it fell
+  # through to the S3 default and the SPA error-page rule turned S3's 403 into
+  # "200 text/html", so a POST to an API path answered with a web page. Routing
+  # it to the load balancer reuses the listener rule that already returns 403
+  # naming the authenticated hostname.
+  ordered_cache_behavior {
+    path_pattern             = "/ask"
+    target_origin_id         = local.alb_origin
+    viewer_protocol_policy   = "https-only"
+    allowed_methods          = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
+    origin_request_policy_id = "b689b0a8-53d0-40ab-baf2-68738e2966ac"
   }
 
-  custom_error_response {
-    error_code            = 404
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 0
-  }
+  # No custom_error_response blocks. CloudFront applies them to every origin, so
+  # an SPA fallback that rewrites 403 to "200 /index.html" also rewrites the load
+  # balancer's 403 for /ask, and would mask genuine errors from /normalize. This
+  # app is a single page with no client-side routes, so the fallback bought
+  # nothing and cost the ability to return an honest status code.
 
   web_acl_id = aws_wafv2_web_acl.web[0].arn
 
